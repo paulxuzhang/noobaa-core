@@ -367,6 +367,7 @@ interface ObjectMD {
     encryption: { algorithm: string; kms_key_id: string; context_b64: string; key_md5_b64: string; key_b64: string; };
     tagging: { key: string; value: string; }[],
     lock_settings: { retention: { mode: string; retain_until_date: Date; }, legal_hold: { status: string } };
+    partial_object?: boolean;
 }
 
 interface ObjectInfo {
@@ -394,6 +395,7 @@ interface ObjectInfo {
     tag_count: number;
     s3_signed_url?: string;
     capacity_size?: number;
+    partial_object?: boolean;
 }
 
 

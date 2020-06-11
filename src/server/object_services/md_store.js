@@ -1180,6 +1180,14 @@ class MDStore {
         return this._parts.col().find({ obj: obj._id, deleted: null }).toArray();
     }
 
+    /**
+     * @param {nb.ObjectMD} obj
+     * @returns {Promise<nb.PartSchemaDB[]>}
+     */
+    // async find_all_completed_parts_of_object(obj) {
+    //     return this._parts.col().find({ obj: obj._id, deleted: null, uncommitted: null }).toArray();
+    // }
+
     update_parts_in_bulk(parts_updates) {
         const bulk = this._parts.col().initializeUnorderedBulkOp();
         for (const update of parts_updates) {

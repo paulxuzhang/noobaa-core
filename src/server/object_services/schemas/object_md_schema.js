@@ -77,6 +77,8 @@ module.exports = {
         upload_started: { objectid: true },
         create_time: { date: true },
         cache_valid_time: { date: true },
+        // indication on whether we have all data for object
+        partial_object: { type: 'boolean' },
 
         // etag is the object md5 hex for objects uploaded in single action.
         // for multipart upload etag is a special aggregated md5 of the parts md5's.

@@ -122,6 +122,15 @@ class NamespaceNB {
         return reply;
     }
 
+    async upload_range_part(params, object_sdk) {
+        params = _.defaults({
+            client: object_sdk.rpc_client,
+            bucket: this.target_bucket,
+        }, params);
+        const reply = await object_sdk.object_io.upload_range_part(params);
+        return reply;
+    }
+
     ////////////////////////
     // BLOCK BLOB UPLOADS //
     ////////////////////////

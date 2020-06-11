@@ -4,6 +4,8 @@
 // we populate the exports object but prefer to keep name referencing
 // with config.NAME so that it will be consistent with the code that imports it
 // and will make searching easier.
+const assert = require('assert');
+
 var config = exports;
 const os = require('os');
 
@@ -252,6 +254,17 @@ config.DB_CLEANER = {
     DOCS_LIMIT: 1000,
     MAX_TOTAL_DOCS: 10000
 };
+
+///////////////////////
+// NAMESPACE CACHING //
+///////////////////////
+config.NAMESPACE_CACHING = {
+    DEFAULT_BLOCK_SIZE: 64 * 1024,
+    MAX_CACHE_OBJECT_SIZE: 4 * 1024 * 1024,
+};
+
+assert(config.NAMESPACE_CACHING.DEFAULT_BLOCK_SIZE <= config.NAMESPACE_CACHING.MAX_CACHE_OBJECT_SIZE);
+assert(config.NAMESPACE_CACHING.DEFAULT_BLOCK_SIZE <= config.MAX_OBJECT_PART_SIZE);
 
 /////////////////////
 // CLOUD RESOURCES //
