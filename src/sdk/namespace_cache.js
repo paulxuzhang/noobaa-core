@@ -115,7 +115,7 @@ class NamespaceCache {
                     params, {hub_tag: object_info_hub.etag, cache_etag: cache_etag});
             }
         } catch (err) {
-            if (err.code === 'NotFound') {
+            if (err.code === 'NoSuchKey') {
                 if (object_info_cache) {
                     this._delete_object_from_cache(params, object_sdk);
                 }
