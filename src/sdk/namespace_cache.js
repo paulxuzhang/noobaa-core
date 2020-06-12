@@ -4,17 +4,33 @@
 const _ = require('lodash');
 const stream = require('stream');
 const assert = require('assert');
+const dbg = require('../util/debug_module')(__filename);
 
 class NamespaceCache {
 
-    constructor({ namespace_hub, namespace_nb, active_triggers }) {
+    constructor({ namespace_hub, namespace_nb, caching, active_triggers }) {
         this.namespace_hub = namespace_hub;
         this.namespace_nb = namespace_nb;
         this.active_triggers = active_triggers;
+        this.caching = caching;
     }
 
     get_write_resource() {
         return this.namespace_hub;
+    }
+
+    _delete_object_from_cache(params, object_sdk) {
+        process.nextTick(() => {
+            const delete_params = _.pick(params, 'bucket', 'key');
+            dbg.log0("NamespaceCache._delete_object_from_cache", delete_params);
+            this.namespace_nb.delete_object(delete_params, object_sdk)
+            .then(() => {
+                dbg.log0('NamespaceCache: deleted object from cache', delete_params);
+            })
+            .catch(err_delete => {
+                dbg.warn('NamespaceCache: error in deleting object from cache', params, err_delete);
+            });
+        });
     }
 
     /////////////////
@@ -41,39 +57,94 @@ class NamespaceCache {
     /////////////////
 
     async read_object_md(params, object_sdk) {
+
+        let object_info_cache = null;
+        let cache_etag = '';
         try {
-            const object_info = await this.namespace_nb.read_object_md(params, object_sdk);
-
-            // TODO this is the wrong condition - object create_time should be preserved 
-            // from hub so not the validation time, so we need a custom cache metadata for that.
-            const cache_validation_time = object_info.create_time;
-            const time_since_validation = Date.now() - cache_validation_time;
-
-            const CACHE_TTL = 60000; // 1 minute
-            if (time_since_validation <= CACHE_TTL) {
-                object_info.should_read_from_cache = true; // mark it for read_object_stream
-                console.log('NamespaceCache.read_object_md: from cache', object_info);
-                return object_info;
+            const get_from_cache = params.get_from_cache;
+            if (get_from_cache) {
+                // Remove get_from_cache if exists for maching RPC schema
+                params = _.omit(params, 'get_from_cache');
+            }
+            object_info_cache = await this.namespace_nb.read_object_md(params, object_sdk);
+            if (get_from_cache) {
+                dbg.log0('NamespaceCache.read_object_md get_from_cache is enabled', object_info_cache);
+                object_info_cache.should_read_from_cache = true;
+                return object_info_cache;
             }
 
+            const cache_validation_time = object_info_cache.cache_valid_time;
+            const time_since_validation = Date.now() - cache_validation_time;
+
+            // caching.ttl is in seconds
+            if (time_since_validation <= this.caching.ttl * 1000) {
+                object_info_cache.should_read_from_cache = true; // mark it for read_object_stream
+                dbg.log0('NamespaceCache.read_object_md use md from cache', object_info_cache);
+                return object_info_cache;
+            }
+
+            cache_etag = object_info_cache.etag;
         } catch (err) {
-            console.warn('NamespaceCache.read_object_md: cache error', err);
+            dbg.log0('NamespaceCache.read_object_md: error in cache', err);
         }
 
-        // TODO do we have any benefit in caching just object mds?
-        return this.namespace_hub.read_object_md(params, object_sdk);
+        let object_info_hub = null;
+        try {
+            object_info_hub = await this.namespace_hub.read_object_md(params, object_sdk);
+            if (object_info_hub.etag === cache_etag) {
+                dbg.log0('NamespaceCache.read_object_md: same etags: updating cache valid time', object_info_hub);
+                process.nextTick(() => {
+                    const update_params = _.pick(_.defaults({ bucket: this.namespace_nb.target_bucket }, params), 'bucket', 'key');
+                    update_params.cache_valid_time = (new Date()).getTime();
+                    object_sdk.rpc_client.object.update_object_md(update_params)
+                        .then(() => {
+                            dbg.log0('NamespaceCache.read_object_md: updated cache valid time', update_params);
+                        })
+                        .catch(err => {
+                            dbg.error('NamespaceCache.read_object_md: error in updating cache valid time', err);
+                        });
+                });
+
+                object_info_cache.should_read_from_cache = true;
+                return object_info_cache;
+
+            } else if (cache_etag === '') {
+                object_info_hub.should_read_from_cache = false;
+            } else {
+                dbg.log0('NamespaceCache.read_object_md: etags different',
+                    params, {hub_tag: object_info_hub.etag, cache_etag: cache_etag});
+            }
+        } catch (err) {
+            if (err.code === 'NotFound') {
+                if (object_info_cache) {
+                    this._delete_object_from_cache(params, object_sdk);
+                }
+            } else {
+                dbg.error('NamespaceCache.read_object_md: NOT NoSuchKey in hub', err);
+            }
+            throw (err);
+        }
+        return object_info_hub;
     }
 
     async read_object_stream(params, object_sdk) {
 
-        if (params.object_md.should_read_from_cache) {
+        const get_from_cache = params.get_from_cache;
+        if (get_from_cache) {
+            // Remove get_from_cache if exists for matching RPC schema in later API calls
+            params = _.omit(params, 'get_from_cache');
+        }
+
+        if (params.object_md.should_read_from_cache || get_from_cache) {
             try {
                 // params.missing_range_handler = async () => {
                 //     this._read_from_hub(params, object_sdk);
                 // };
+
+                dbg.log0('NamespaceCache.read_object_stream: read from cache', params);
                 return this.namespace_nb.read_object_stream(params, object_sdk);
             } catch (err) {
-                console.warn('NamespaceCache.read_object_stream: cache error', err);
+                dbg.warn('NamespaceCache.read_object_stream: cache error', err);
             }
         }
 
@@ -97,7 +168,7 @@ class NamespaceCache {
             xattr: params.object_md.xattr,
         };
 
-        console.log('NamespaceCache.read_object_stream: put to cache',
+        dbg.log0('NamespaceCache.read_object_stream: put to cache',
             _.omit(upload_params, 'source_stream'));
 
 
@@ -113,13 +184,12 @@ class NamespaceCache {
     ///////////////////
 
     async upload_object(params, object_sdk) {
+        dbg.log0("NamespaceCache.upload_object", _.omit(params, 'source_stream'));
 
         if (params.size > 1024 * 1024) {
 
-            // TODO: INVALIDATE CACHE
-            // await this.namespace_nb.delete_object(TODO);
+            this._delete_object_from_cache(params, object_sdk);
 
-            // UPLOAD TO HUB ONLY
             return this.namespace_hub.upload_object(params, object_sdk);
 
         } else {
@@ -136,12 +206,30 @@ class NamespaceCache {
             const cache_params = { ...params, source_stream: cache_stream };
             const cache_promise = this.namespace_nb.upload_object(cache_params, object_sdk);
 
+            // One important caveat is that if the Readable stream emits an error during processing,
+            // the Writable destination is not closed automatically. If an error occurs, it will be
+            // necessary to manually close each stream in order to prevent memory leaks.
+            params.source_stream.on('error', err => {
+                dbg.log0("NamespaceCache.upload_object: error in read source", {params: _.omit(params, 'source_stream'), error: err});
+                hub_stream.destroy();
+                cache_stream.destroy();
+            });
+
             params.source_stream.pipe(hub_stream);
             params.source_stream.pipe(cache_stream);
 
-            const [hub_res, cache_res] = await Promise.all([hub_promise, cache_promise]);
-            assert.strictEqual(hub_res.etag, cache_res.etag);
-            return hub_res;
+            const hub_upload = await Promise.all([ hub_promise, cache_promise ])
+            .then(([hub_res, cache_res]) => {
+                assert.strictEqual(hub_res.etag, cache_res.etag);
+                return hub_res;
+            })
+            .catch(err => {
+                dbg.log0("NamespaceCache.upload_object: error in upload", {params, error: err});
+                // If error is from cache, we should probably ignore and let hub upload continue. Change Promise.all to Promise.allSettled?
+                throw err;
+            });
+
+            return hub_upload;
         }
     }
 

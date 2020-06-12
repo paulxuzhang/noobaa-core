@@ -18,7 +18,8 @@ import { createNamespaceBucket as learnMoreHref } from 'knowledge-base-articles'
 
 const steps = deepFreeze([
     'Choose Name',
-    'Set Placement'
+    'Set Placement',
+    'Set Caching Policy'
 ]);
 
 const readPolicyTableColumns = deepFreeze([
@@ -47,7 +48,8 @@ const readPolicyTableColumns = deepFreeze([
 
 const fieldsByStep = deepFreeze({
     0: [ 'bucketName' ],
-    1: [ 'readPolicy', 'writePolicy' ]
+    1: [ 'readPolicy', 'writePolicy' ],
+    2: [ 'cacheTTL' ]
 });
 
 class ResourceRowViewModel {
@@ -87,11 +89,14 @@ class CreateNamespaceBucketModalViewModel extends ConnectableViewModel {
     resourceServiceMapping = {};
     readPolicy = [];
     writePolicy = '';
+    maxCacheTTL = 3600;
+
     fields = {
         step: 0,
         bucketName: '',
         readPolicy: [],
-        writePolicy: undefined
+        writePolicy: undefined,
+        cacheTTL: 0
     };
 
     selectState(state) {
@@ -111,6 +116,7 @@ class CreateNamespaceBucketModalViewModel extends ConnectableViewModel {
         const bucketName = getFieldValue(form, 'bucketName');
         const readPolicy = getFieldValue(form, 'readPolicy');
         const writePolicy = getFieldValue(form, 'writePolicy');
+        const cacheTTL = getFieldValue(form, 'cacheTTL');
         const existingNames = [
             ...Object.keys(buckets),
             ...Object.keys(namespaceBuckets)
@@ -161,7 +167,8 @@ class CreateNamespaceBucketModalViewModel extends ConnectableViewModel {
             resourceServiceMapping,
             isStepValid: isFormValid(form),
             readPolicy,
-            writePolicy
+            writePolicy,
+            cacheTTL
         });
 
     }
@@ -188,7 +195,7 @@ class CreateNamespaceBucketModalViewModel extends ConnectableViewModel {
     }
 
     onValidate(values) {
-        const { step, bucketName, readPolicy, writePolicy } = values;
+        const { step, bucketName, readPolicy, writePolicy, cacheTTL } = values;
         const errors = {};
 
         if (step === 0) {
@@ -205,6 +212,11 @@ class CreateNamespaceBucketModalViewModel extends ConnectableViewModel {
 
             } else if (!writePolicy) {
                 errors.writePolicy = 'Please select a namespace resource';
+            }
+        } else if (step === 2) {
+            let maxCacheTTL = this.maxCacheTTL;
+            if (cacheTTL < 0 || cacheTTL > maxCacheTTL ) {
+                errors.cacheTTL = `Please enter a number between 0 and ${maxCacheTTL}.`;
             }
         }
 
@@ -237,10 +249,10 @@ class CreateNamespaceBucketModalViewModel extends ConnectableViewModel {
     }
 
     onSubmit(values) {
-        const { bucketName, readPolicy, writePolicy } = values;
+        const { bucketName, readPolicy, writePolicy, cacheTTL } = values;
         this.dispatch(
             closeModal(),
-            createNamespaceBucket(bucketName, readPolicy, writePolicy)
+            createNamespaceBucket(bucketName, readPolicy, writePolicy, cacheTTL)
         );
     }
 

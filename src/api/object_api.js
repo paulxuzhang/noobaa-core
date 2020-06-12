@@ -254,6 +254,9 @@ module.exports = {
                     create_time: {
                         idate: true
                     },
+                    cache_valid_time: {
+                        idate: true
+                    },
                     encryption: { $ref: 'common_api#/definitions/object_encryption' }
                 }
             },
@@ -549,6 +552,7 @@ module.exports = {
                     key: { type: 'string' },
                     content_type: { type: 'string' },
                     xattr: { $ref: '#/definitions/xattr' },
+                    cache_valid_time: { idate: true },
                 }
             },
             auth: { system: ['admin', 'user'] }
@@ -1325,6 +1329,7 @@ module.exports = {
                 num_parts: { type: 'integer' },
                 content_type: { type: 'string' },
                 create_time: { idate: true },
+                cache_valid_time: { idate: true },
                 upload_started: { idate: true },
                 upload_size: { type: 'integer' },
                 etag: { type: 'string' },

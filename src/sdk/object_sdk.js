@@ -163,15 +163,14 @@ class ObjectSDK {
         try {
             if (bucket.namespace && bucket.namespace.read_resources && bucket.namespace.write_resource) {
 
-                // TODO: NAMESPACE_CACHE_DEV is temporarily used for manual override
-                bucket.namespace.cache = (process.env.NAMESPACE_CACHE_DEV === 'true');
-
-                if (bucket.namespace.cache) {
+                dbg.log0('_setup_bucket_namespace', bucket.namespace);
+                if (bucket.namespace.caching && bucket.namespace.caching.ttl) {
                     return {
                         ns: new NamespaceCache({
                             namespace_hub: this._setup_single_namespace(_.extend({}, bucket.namespace.write_resource)),
                             namespace_nb: this.namespace_nb,
                             active_triggers: bucket.namespace.write_resource,
+                            caching: bucket.namespace.caching,
                         }),
                         bucket,
                         valid_until: time + NAMESPACE_CACHE_EXPIRY,
