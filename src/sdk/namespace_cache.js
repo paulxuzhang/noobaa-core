@@ -12,12 +12,11 @@ const RangeStream = require('../util/range_stream');
 
 class NamespaceCache {
 
-    constructor({ namespace_hub, namespace_nb, rpc_client, caching, active_triggers }) {
+    constructor({ namespace_hub, namespace_nb, caching, active_triggers }) {
         this.namespace_hub = namespace_hub;
         this.namespace_nb = namespace_nb;
         this.active_triggers = active_triggers;
         this.caching = caching;
-        this.rpc_client = rpc_client;
     }
 
     get_write_resource() {
@@ -27,12 +26,13 @@ class NamespaceCache {
     _delete_object_from_cache(params, object_sdk) {
         process.nextTick(() => {
             const delete_params = _.pick(params, 'bucket', 'key');
+            dbg.log0("NamespaceCache._delete_object_from_cache", delete_params);
             this.namespace_nb.delete_object(delete_params, object_sdk)
             .then(() => {
                 dbg.log0('NamespaceCache: deleted object from cache', delete_params);
             })
             .catch(err_delete => {
-                dbg.error('NamespaceCache: error in deleting object from cache', params, err_delete);
+                dbg.warn('NamespaceCache: error in deleting object from cache', params, err_delete);
             });
         });
     }
@@ -123,7 +123,7 @@ class NamespaceCache {
             object_info_cache = await this.namespace_nb.read_object_md(params, object_sdk);
             if (get_from_cache) {
                 dbg.log0('NamespaceCache.read_object_md get_from_cache is enabled', object_info_cache);
-                object_info_cache.from_cache = true;
+                object_info_cache.should_read_from_cache = true;
                 return object_info_cache;
             }
 
@@ -132,7 +132,7 @@ class NamespaceCache {
 
             // caching.ttl is in seconds
             if (time_since_validation <= this.caching.ttl * 1000) {
-                object_info_cache.from_cache = true; // mark it for read_object_stream
+                object_info_cache.should_read_from_cache = true; // mark it for read_object_stream
                 dbg.log0('NamespaceCache.read_object_md use md from cache', object_info_cache);
                 return object_info_cache;
             }
@@ -150,7 +150,7 @@ class NamespaceCache {
                 process.nextTick(() => {
                     const update_params = _.pick(_.defaults({ bucket: this.namespace_nb.target_bucket }, params), 'bucket', 'key');
                     update_params.cache_valid_time = (new Date()).getTime();
-                    this.rpc_client.object.update_object_md(update_params)
+                    object_sdk.rpc_client.object.update_object_md(update_params)
                         .then(() => {
                             dbg.log0('NamespaceCache.read_object_md: updated cache valid time', update_params);
                         })
@@ -159,17 +159,17 @@ class NamespaceCache {
                         });
                 });
 
-                object_info_cache.from_cache = true;
+                object_info_cache.should_read_from_cache = true;
                 return object_info_cache;
 
             } else if (cache_etag === '') {
-                object_info_hub.from_cache = false;
+                object_info_hub.should_read_from_cache = false;
             } else {
                 dbg.log0('NamespaceCache.read_object_md: etags different',
                     params, {hub_tag: object_info_hub.etag, cache_etag: cache_etag});
             }
         } catch (err) {
-            if (err.code === 'NotFound') {
+            if (err.code === 'NoSuchKey') {
                 if (object_info_cache) {
                     this._delete_object_from_cache(params, object_sdk);
                 }
@@ -186,7 +186,7 @@ class NamespaceCache {
         dbg.log0('NamespaceCache._range_read_hub_object_stream', {params: params});
 
         const block_size = config.NAMESPACE_CACHING.DEFAULT_BLOCK_SIZE;
-        if (!params.object_md.from_cache) {
+        if (!params.object_md.should_read_from_cache) {
             const create_params = _.pick(params,
                 'bucket',
                 'key',
@@ -327,7 +327,7 @@ class NamespaceCache {
             params = _.omit(params, 'get_from_cache');
         }
 
-        if ((params.object_md.from_cache && !params.object_md.partial_object) || get_from_cache) {
+        if ((params.object_md.should_read_from_cache && !params.object_md.partial_object) || get_from_cache) {
             // Cache should have entire object
             try {
                 dbg.log0('NamespaceCache.read_object_stream: read from cache', {params: params});
@@ -352,69 +352,53 @@ class NamespaceCache {
 
     async upload_object(params, object_sdk) {
 
+        dbg.log0("NamespaceCache.upload_object", _.omit(params, 'source_stream'));
+
         if (params.size > config.NAMESPACE_CACHING.MAX_CACHE_OBJECT_SIZE) {
-            const upload = this.namespace_hub.upload_object(params, object_sdk);
+
             this._delete_object_from_cache(params, object_sdk);
-            return upload;
-        }
 
-        const hub_stream = new stream.PassThrough();
-        const cache_stream = new stream.PassThrough({
-            final(callback) {
-                // defer the finalizer of the cache stream until the hub ack
-                if (hub_stream.writableFinished) {
-                    dbg.log0("NamespaceCache.upload_object: upload hub has been completed",
-                        {bucket: params.bucket, xattr: params.xattr, object_sdk: object_sdk.namespace_nb});
+            return this.namespace_hub.upload_object(params, object_sdk);
 
-                    return callback();
-                } else {
-                    dbg.log0("NamespaceCache.upload_object: waiting for hub to complete",
-                        {bucket: params.bucket, xattr: params.xattr, object_sdk: object_sdk.namespace_nb});
-                    hub_stream.on('finish', callback);
-                }
-            }
-        });
+        } else {
 
-        const hub_params = { ...params, source_stream: hub_stream };
-        const cache_params = { ...params, source_stream: cache_stream };
-        // One important caveat is that if the Readable stream emits an error during processing,
-        // the Writable destination is not closed automatically. If an error occurs, it will be
-        // necessary to manually close each stream in order to prevent memory leaks.
-        params.source_stream.on('error', err => {
-            dbg.log0("NamespaceCache.upload_object: error in read source",
-                {bucket: params.bucket, xattr: params.xattr, object_sdk: object_sdk.namespace_nb, error: err});
-            hub_stream.destroy();
-            cache_stream.destroy();
-        });
-        params.source_stream.on('close', () => {
-            dbg.log0("NamespaceCache.upload_object: closing in read source",
-                {bucket: params.bucket, xattr: params.xattr, object_sdk: object_sdk.namespace_nb });
-                if (!params.source_stream.readableEnded) {
-                    dbg.log0("NamespaceCache.upload_object: closing in read source - NOT readableEnded - Should be error",
-                    {bucket: params.bucket, xattr: params.xattr, object_sdk: object_sdk.namespace_nb });
+            // UPLOAD SIMULTANEOUSLY TO BOTH
+
+            const hub_stream = new stream.PassThrough();
+            const hub_params = { ...params, source_stream: hub_stream };
+            const hub_promise = this.namespace_hub.upload_object(hub_params, object_sdk);
+
+            // defer the final callback of the cache stream until the hub ack
+            const cache_finalizer = callback => hub_promise.then(() => callback(), err => callback(err));
+            const cache_stream = new stream.PassThrough({ final: cache_finalizer });
+            const cache_params = { ...params, source_stream: cache_stream };
+            const cache_promise = this.namespace_nb.upload_object(cache_params, object_sdk);
+
+            // One important caveat is that if the Readable stream emits an error during processing,
+            // the Writable destination is not closed automatically. If an error occurs, it will be
+            // necessary to manually close each stream in order to prevent memory leaks.
+            params.source_stream.on('error', err => {
+                dbg.log0("NamespaceCache.upload_object: error in read source", {params: _.omit(params, 'source_stream'), error: err});
                 hub_stream.destroy();
                 cache_stream.destroy();
-            }
-        });
-        params.source_stream.pipe(hub_stream);
-        params.source_stream.pipe(cache_stream);
+            });
 
-        const hub_res1 = await Promise.all([
-            this.namespace_hub.upload_object(hub_params, object_sdk),
-            this.namespace_nb.upload_object(cache_params, object_sdk),
-        ])
-        .then(([hub_res, cache_res]) => {
-            assert.strictEqual(hub_res.etag, cache_res.etag);
-            return hub_res;
-        })
-        .catch(err => {
-            dbg.log0("NamespaceCache.upload_object: error in upload",
-                {bucket: params.bucket, xattr: params.xattr, object_sdk: object_sdk.namespace_nb, error: err});
-            // If error is from cache, we should probably ignore and let hub upload continue. Change Promise.all to Promise.allSettled?
-            throw err;
-        });
+            params.source_stream.pipe(hub_stream);
+            params.source_stream.pipe(cache_stream);
 
-        return hub_res1;
+            const hub_upload = await Promise.all([ hub_promise, cache_promise ])
+            .then(([hub_res, cache_res]) => {
+                assert.strictEqual(hub_res.etag, cache_res.etag);
+                return hub_res;
+            })
+            .catch(err => {
+                dbg.log0("NamespaceCache.upload_object: error in upload", {params, error: err});
+                // If error is from cache, we should probably ignore and let hub upload continue. Change Promise.all to Promise.allSettled?
+                throw err;
+            });
+
+            return hub_upload;
+        }
     }
 
     //////////////////////
@@ -434,6 +418,10 @@ class NamespaceCache {
     }
 
     async complete_object_upload(params, object_sdk) {
+
+        // TODO: INVALIDATE CACHE
+        // await this.namespace_nb.delete_object(TODO);
+
         return this.namespace_hub.complete_object_upload(params, object_sdk);
     }
 
@@ -448,15 +436,15 @@ class NamespaceCache {
     async delete_object(params, object_sdk) {
 
         /*
-        // DELETE CACHE
-        try {
-            await this.namespace_nb.delete_object(params, object_sdk);
-        } catch (err) {
-            if (err !== 'NotFound') throw;
-        }
+            // DELETE CACHE
+            try {
+                await this.namespace_nb.delete_object(params, object_sdk);
+            } catch (err) {
+                if (err !== 'NotFound') throw;
+            }
 
-        // DELETE HUB
-        return this.namespace_hub.delete_object(params, object_sdk);
+            // DELETE HUB
+            return this.namespace_hub.delete_object(params, object_sdk);
       */
 
         const [hub_res, cache_res] = await Promise.allSettled([
@@ -466,8 +454,9 @@ class NamespaceCache {
         if (hub_res.status === 'rejected') {
             throw hub_res.reason;
         }
-        if (cache_res.status === 'rejected') {
-            if (cache_res.reason.code !== 'NoSuchKey') throw cache_res.reason;
+        if (cache_res.status === 'rejected' &&
+            cache_res.reason.code !== 'NoSuchKey') {
+            throw cache_res.reason;
         }
         return hub_res.value;
     }

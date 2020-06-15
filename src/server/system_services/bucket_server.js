@@ -822,11 +822,13 @@ async function delete_bucket(req) {
             };
         }));
 
-    await system_store.make_changes({
-        update: {
-            accounts: accounts_update
-        }
-    });
+    if (!_.isEmpty(accounts_update)) {
+        await system_store.make_changes({
+            update: {
+                accounts: accounts_update
+            }
+        });
+    }
 }
 
 /**

@@ -415,6 +415,9 @@ config.PROMETHEUS_PREFIX = 'NooBaa_';
 
 config.OAUTH_REDIRECT_ENDPOINT = 'fe/oauth/callback';
 config.OAUTH_REQUIRED_SCOPE = 'user:info';
+config.OAUTH_REQUIRED_GROUPS = [
+    'system:cluster-admins'
+];
 
 //////////////////////////////
 // KUBERNETES RELATES       //
