@@ -66,6 +66,7 @@ async function create_object_upload(req) {
         content_type: req.rpc_params.content_type ||
             mime.getType(req.rpc_params.key) ||
             'application/octet-stream',
+        upload_started: obj_id,
         upload_size: 0,
         tagging: req.rpc_params.tagging,
         encryption
@@ -81,7 +82,6 @@ async function create_object_upload(req) {
         info.partial_object = true;
         info.etag = req.rpc_params.etag;
     } else {
-        info.upload_started = obj_id;
         const lock_settings = config.WORM_ENABLED ? calc_retention(req) : undefined;
         if (lock_settings) info.lock_settings = lock_settings;
     }

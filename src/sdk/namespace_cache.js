@@ -55,7 +55,7 @@ class NamespaceCache {
     _range_read_hub_check(params) {
         const block_info = this._get_block_idx(params);
         if (block_info) {
-            let block_size = config.NAMESPACE_CACHING.MAX_CACHE_OBJECT_SIZE;
+            let block_size = config.NAMESPACE_CACHING.DEFAULT_BLOCK_SIZE;
             if (params.object_md.size <= block_size) return;
             if (params.object_md.size <= config.NAMESPACE_CACHING.MAX_CACHE_OBJECT_SIZE) {
                 const range_size = (block_info.start_block_idx - block_info.start_block_idx + 1) * block_size;
@@ -187,25 +187,29 @@ class NamespaceCache {
 
         const block_size = config.NAMESPACE_CACHING.DEFAULT_BLOCK_SIZE;
         if (!params.object_md.should_read_from_cache) {
-            const create_params = _.pick(params,
-                'bucket',
-                'key',
-                'content_type',
-                'size',
-                'etag',
-                'xattr',
-                'partial_object'
-            );
-            create_params.size = params.object_md.size;
-            create_params.etag = params.object_md.etag;
-            create_params.xattr = params.object_md.xattr;
-            create_params.partial_object = true;
-            const create_reply = await object_sdk.rpc_client.object.create_object_upload(create_params);
-            dbg.log0('NamespaceCache._range_read_hub_object_stream: partial upload created:', create_reply.obj_id);
+            const read_size = params.end - params.start;
+            if (read_size <= config.NAMESPACE_CACHING.MAX_CACHE_OBJECT_SIZE) {
+                const create_params = _.pick(params,
+                    'bucket',
+                    'key',
+                    'content_type',
+                    'size',
+                    'etag',
+                    'xattr',
+                    'partial_object'
+                );
+                create_params.size = params.object_md.size;
+                create_params.etag = params.object_md.etag;
+                create_params.xattr = params.object_md.xattr;
+                create_params.partial_object = true;
 
+                const create_reply = await object_sdk.rpc_client.object.create_object_upload(create_params);
+                dbg.log0('NamespaceCache._range_read_hub_object_stream: partial upload created:', create_reply.obj_id);
+
+                params.object_md.obj_id = create_reply.obj_id;
+            }
             const aligned_read_start = range_utils.align_down(params.start, block_size);
             const aligned_read_end = range_utils.align_up(params.end, block_size);
-            params.object_md.obj_id = create_reply.obj_id;
 
             // Read aligned range of bytes
             return this._read_hub_object_stream(params, object_sdk, { start: aligned_read_start, end: aligned_read_end });
