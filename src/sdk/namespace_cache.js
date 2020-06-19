@@ -167,6 +167,8 @@ class NamespaceCache {
             } else {
                 dbg.log0('NamespaceCache.read_object_md: etags different',
                     params, {hub_tag: object_info_hub.etag, cache_etag: cache_etag});
+
+                this._delete_object_from_cache(params, object_sdk);
             }
         } catch (err) {
             if (err.code === 'NoSuchKey') {
@@ -423,8 +425,7 @@ class NamespaceCache {
 
     async complete_object_upload(params, object_sdk) {
 
-        // TODO: INVALIDATE CACHE
-        // await this.namespace_nb.delete_object(TODO);
+        this._delete_object_from_cache(params, object_sdk);
 
         return this.namespace_hub.complete_object_upload(params, object_sdk);
     }
