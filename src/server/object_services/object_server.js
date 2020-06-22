@@ -493,27 +493,6 @@ async function complete_object_part_upload(req) {
     };
 }
 
-/**
- *
- * list_object_parts
- *
- */
-// async function list_object_parts(req) {
-//     const obj = await find_cached_partial_object_upload(req);
-//     const parts = await MDStore.instance().find_all_completed_parts_of_object(obj);
-//     const reply = {
-//         parts: [],
-//     };
-
-//     parts.sort(_sort_parts_by_seq);
-//     for (const part of parts) {
-//         reply.parts.push({
-//             start: part.start,
-//             end: part.end,
-//         });
-//     }
-//     return reply;
-// }
 
 async function update_bucket_counters({ system, bucket_name, content_type, read_count, write_count }) {
     const bucket = system.buckets_by_name[bucket_name.unwrap()];
@@ -2096,7 +2075,6 @@ exports.complete_object_upload = complete_object_upload;
 exports.complete_object_part_upload = complete_object_part_upload;
 exports.abort_object_upload = abort_object_upload;
 exports.start_object_part_upload = start_object_part_upload;
-//exports.list_object_parts = list_object_parts;
 // multipart
 exports.create_multipart = create_multipart;
 exports.complete_multipart = complete_multipart;

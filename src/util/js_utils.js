@@ -196,61 +196,6 @@ function map_get_or_create(map, key, item_initializer) {
     }
 }
 
-/**
- * Based upon https://github.com/lodash/lodash/blob/master/.internal/baseSortedIndexBy.js
- * @param {Array} array The sorted array to inspect.
- * @param {*} value The value to evaluate.
- * @param {Function} iteratee The iteratee invoked per element.
- * @returns {number} Returns the index at which `value` should be inserted
- *  into `array`.
- */
-function findSortedIndexBy(array, value, iteratee) {
-    let low = 0;
-    let high = array === null ? 0 : array.length;
-    if (high === 0) {
-        return -1;
-    }
-
-    value = iteratee(value);
-
-    const valIsNaN = value !== value;
-    const valIsNull = value === null;
-    const valIsSymbol = _.isSymbol(value);
-    const valIsUndefined = value === undefined;
-
-    while (low < high) {
-        let setLow;
-        const mid = Math.floor((low + high) / 2);
-        const computed = iteratee(array[mid]);
-
-        const othIsDefined = computed !== undefined;
-        const othIsNull = computed === null;
-        const othIsReflexive = computed === computed;
-        const othIsSymbol = _.isSymbol(computed);
-
-        if (valIsNaN) {
-            setLow = othIsReflexive;
-        } else if (valIsUndefined) {
-            setLow = othIsReflexive && othIsDefined;
-        } else if (valIsNull) {
-            setLow = othIsReflexive && othIsDefined && !othIsNull;
-        } else if (valIsSymbol) {
-            setLow = othIsReflexive && othIsDefined && !othIsNull && !othIsSymbol;
-        } else if (othIsNull || othIsSymbol) {
-            setLow = false;
-        } else {
-            if (computed === value) return mid;
-            setLow = (computed < value);
-        }
-        if (setLow) {
-            low = mid + 1;
-        } else {
-            high = mid;
-        }
-    }
-    return -1;
-}
-
 exports.self_bind = self_bind;
 exports.array_push_all = array_push_all;
 exports.array_push_keep_latest = array_push_keep_latest;
@@ -263,4 +208,3 @@ exports.PackedObject = PackedObject;
 exports.inspect_lazy = inspect_lazy;
 exports.make_array = make_array;
 exports.map_get_or_create = map_get_or_create;
-exports.findSortedIndexBy = findSortedIndexBy;

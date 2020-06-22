@@ -82,7 +82,7 @@ module.exports = {
         'max-classes-per-file': 'off',
 
         // max file length is 300 by default, we accept longer files
-        'max-lines': ['error', 2000],
+        'max-lines': ['error', 2500],
 
         // max lines per function, default is 50
         'max-lines-per-function': ['error', 400],

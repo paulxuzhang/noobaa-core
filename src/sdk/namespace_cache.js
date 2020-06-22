@@ -6,7 +6,6 @@ const stream = require('stream');
 const assert = require('assert');
 const dbg = require('../util/debug_module')(__filename);
 const cache_config = require('../../config.js').NAMESPACE_CACHING;
-//const js_utils = require('../util/js_utils');
 const range_utils = require('../util/range_utils');
 const RangeStream = require('../util/range_stream');
 
@@ -90,29 +89,6 @@ class NamespaceCache {
 
         return false;
     }
-
-    // async _find_missing_parts_cache(params, object_sdk, parts) {
-    //     const list_params = _.pick(params, 'bucket', 'key', 'obj_id');
-    //     list_params.obj_id = params.object_md.obj_id;
-    //     // TODO: implement LRU cache
-    //     const list_reply = await object_sdk.rpc_client.object.list_object_parts(list_params);
-    //     const num_cached_parts = list_reply.part.length;
-
-    //     const min_cached_block_idx = list_reply.parts[0].seq;
-    //     const max_cached_block_idx = list_reply.parts[num_cached_parts - 1].seq;
-    //     if (num_cached_parts === 0) return parts;
-    //     if (parts.end_block_idx < min_cached_block_idx || parts.start_block_idx > max_cached_block_idx) return parts;
-
-    //     const block_idx_list = _.range(parts.start_block_idx, parts.end_block_idx + 1);
-    //     const missing_blocks = block_idx_list.filter(idx => {
-    //         if (idx < min_cached_block_idx || idx > max_cached_block_idx) return true;
-    //         const found_idx = js_utils.findSortedIndexBy(list_reply.parts, { seq: idx }, p => p.seq);
-    //         if (found_idx < 0) return true;
-    //         return false;
-    //     });
-
-    //     return missing_blocks;
-    // }
 
     /////////////////
     // OBJECT LIST //
