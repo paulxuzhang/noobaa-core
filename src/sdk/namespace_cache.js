@@ -156,8 +156,8 @@ class NamespaceCache {
             const cache_validation_time = object_info_cache.cache_valid_time;
             const time_since_validation = Date.now() - cache_validation_time;
 
-            // caching.ttl is in seconds
-            if (time_since_validation <= this.caching.ttl * 1000) {
+            // caching.ttl is in milliseconds
+            if (time_since_validation <= this.caching.ttl) {
                 object_info_cache.should_read_from_cache = true; // mark it for read_object_stream
                 dbg.log0('NamespaceCache.read_object_md use md from cache', object_info_cache);
                 return object_info_cache;
@@ -388,6 +388,7 @@ class NamespaceCache {
     ///////////////////
 
     async upload_object(params, object_sdk) {
+        dbg.log0("NamespaceCache.upload_object", _.omit(params, 'source_stream'));
 
         dbg.log0("NamespaceCache.upload_object", _.omit(params, 'source_stream'));
 

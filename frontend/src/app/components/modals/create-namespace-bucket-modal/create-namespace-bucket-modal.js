@@ -89,6 +89,7 @@ class CreateNamespaceBucketModalViewModel extends ConnectableViewModel {
     resourceServiceMapping = {};
     readPolicy = [];
     writePolicy = '';
+    // In seconds
     maxCacheTTL = 3600;
 
     fields = {

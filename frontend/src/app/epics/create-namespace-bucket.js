@@ -17,7 +17,8 @@ export default function(action$, { api }) {
                     read_resources: readFrom,
                     write_resource: writeTo,
                     caching: {
-                        ttl: cacheTTL
+                        // ttl in API is in milliseconds. cacheTTL from UI input is in seconds
+                        ttl: cacheTTL * 1000
                     }
                 };
 

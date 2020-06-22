@@ -751,10 +751,10 @@ module.exports = {
 
         bucket_cache_ttl: {
             type: 'integer',
-            // In seconds, 0 means caching is disabled ???
+            // In seconds, 0 means caching is disabled
             minimum: 0,
-            // 15 days
-            maximum: 3600
+            // 1 hour in milliseconds
+            maximum: 3600000
         },
 
         bucket_cache_config: {
