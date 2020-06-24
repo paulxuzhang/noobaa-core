@@ -366,8 +366,6 @@ class NamespaceCache {
     async upload_object(params, object_sdk) {
         dbg.log0("NamespaceCache.upload_object", _.omit(params, 'source_stream'));
 
-        dbg.log0("NamespaceCache.upload_object", _.omit(params, 'source_stream'));
-
         if (params.size > cache_config.MAX_CACHE_OBJECT_SIZE) {
 
             this._delete_object_from_cache(params, object_sdk);
