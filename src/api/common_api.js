@@ -748,6 +748,25 @@ module.exports = {
                 'NO_RESOURCES'
             ]
         },
+
+        bucket_cache_ttl: {
+            type: 'integer',
+            // In seconds, 0 means caching is disabled
+            minimum: 0,
+            // 1 hour in milliseconds
+            maximum: 3600000
+        },
+
+        bucket_cache_config: {
+            type: 'object',
+            required: [ 'ttl' ],
+            properties: {
+                ttl: {
+                    $ref: '#/definitions/bucket_cache_ttl'
+                }
+            }
+        },
+
         lock_settings: {
             type: 'object',
             properties: {

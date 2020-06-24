@@ -37,6 +37,7 @@ class S3OPS {
             throw new Error('You cannot do this: SigV4 requires https to disable body signing and send streams...');
         }
         const rest_endpoint = use_https ? `https://${ip}:${ssl_port}` : `http://${ip}:${port}`;
+        console.log("rest_endpoint:", rest_endpoint);
         this.s3 = new AWS.S3({
             endpoint: rest_endpoint,
             accessKeyId: access_key,
@@ -673,7 +674,7 @@ class S3OPS {
         }
     }
 
-    async get_object(bucket, key) {
+    async get_object(bucket, key, query_params) {
         const params = {
             Bucket: bucket,
             Key: key
@@ -681,7 +682,21 @@ class S3OPS {
         console.log('Reading object ', key);
         try {
             //There can be an issue if the object size (length) is too large
-            const obj = await this.s3.getObject(params).promise();
+            const obj = await this.s3.getObject(params)
+            .on('build', req => {
+                if (query_params) {
+                    for (const [k, v] of Object.entries(query_params)) {
+                        if (v !== '') {
+                            console.log(`Setting query parameter ${k}=${v} for ${key}`);
+                            if (req.httpRequest.search()) {
+                                req.httpRequest.path += `&${k}=${v}`;
+                            } else {
+                                req.httpRequest.path += `?${k}=${v}`;
+                            }
+                        }
+                    }
+                }
+            }).promise();
             return obj;
         } catch (err) {
             this.log_error(`get_object:: getObject ${JSON.stringify(params)} failed!`, err);

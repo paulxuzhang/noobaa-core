@@ -69,6 +69,9 @@ module.exports = {
                                 items: {
                                     type: 'string'
                                 },
+                            },
+                            caching: {
+                                $ref: 'common_api#/definitions/bucket_cache_config'
                             }
                         }
                     },
@@ -1120,7 +1123,7 @@ module.exports = {
                 },
                 policy: {
                     $ref: 'common_api#/definitions/bucket_policy'
-                }
+                },
             }
         },
 
@@ -1129,6 +1132,7 @@ module.exports = {
             required: [
                 'read_resources',
                 'write_resource',
+                'caching'
             ],
             properties: {
                 read_resources: {
@@ -1139,6 +1143,9 @@ module.exports = {
                 },
                 write_resource: {
                     type: 'string'
+                },
+                caching: {
+                    $ref: 'common_api#/definitions/bucket_cache_config'
                 }
             }
         },
@@ -1190,7 +1197,10 @@ module.exports = {
                         },
                         write_resource: {
                             $ref: 'pool_api#/definitions/namespace_resource_extended_info'
-                        }
+                        },
+                        caching: {
+                            $ref: 'common_api#/definitions/bucket_cache_config'
+                        },
                     },
                 },
                 active_triggers: {
