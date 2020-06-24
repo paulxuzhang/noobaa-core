@@ -761,6 +761,7 @@ function slice_buffers_in_range(chunks, start, end, partial_object) {
             if (partial_object && end <= part.start) {
                 // null data means that the part is missing.
                 buffers.push({ start: pos, end, data: null });
+                pos = end;
                 break;
             }
             continue;

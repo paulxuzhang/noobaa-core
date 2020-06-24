@@ -85,7 +85,7 @@ module.exports = {
         'max-lines': ['error', 2500],
 
         // max lines per function, default is 50
-        'max-lines-per-function': ['error', 400],
+        'max-lines-per-function': ['error', 600],
 
         // prefer small number of params to functions, otherwise send object
         // TODO eslint max-params per function should be reduced to ~4 instead of 6
