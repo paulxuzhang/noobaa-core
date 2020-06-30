@@ -338,7 +338,7 @@ class NamespaceCache {
         if ((params.object_md.should_read_from_cache && !params.object_md.partial_object) || get_from_cache) {
             // Cache should have entire object
             try {
-                dbg.log0('NamespaceCache.read_object_stream: read from cache', {params: params});
+                dbg.log0('NamespaceCache.read_object_stream: read from cache', params);
                 read_response = await this.namespace_nb.read_object_stream(params, object_sdk);
             } catch (err) {
                 dbg.warn('NamespaceCache.read_object_stream: cache error', err);
@@ -470,7 +470,7 @@ class NamespaceCache {
 
     async complete_object_upload(params, object_sdk) {
 
-        this._delete_object_from_cache(params, object_sdk);
+        setImmediate(() => this._delete_object_from_cache(params, object_sdk));
 
         return this.namespace_hub.complete_object_upload(params, object_sdk);
     }

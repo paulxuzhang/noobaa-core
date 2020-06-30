@@ -1132,7 +1132,6 @@ module.exports = {
             required: [
                 'read_resources',
                 'write_resource',
-                'caching'
             ],
             properties: {
                 read_resources: {

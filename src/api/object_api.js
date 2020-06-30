@@ -340,9 +340,6 @@ module.exports = {
                     create_time: {
                         idate: true
                     },
-                    cache_valid_time: {
-                        idate: true
-                    },
                     encryption: { $ref: 'common_api#/definitions/object_encryption' }
                 }
             },
