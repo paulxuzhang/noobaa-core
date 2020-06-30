@@ -89,15 +89,15 @@ class CreateNamespaceBucketModalViewModel extends ConnectableViewModel {
     resourceServiceMapping = {};
     readPolicy = [];
     writePolicy = '';
-    // In seconds
-    maxCacheTTL = 3600;
+    enableCaching = ko.observable(false);
 
     fields = {
         step: 0,
         bucketName: '',
         readPolicy: [],
         writePolicy: undefined,
-        cacheTTL: 0
+        cacheTTL: 60000,
+        enableCaching: false
     };
 
     selectState(state) {
@@ -253,7 +253,10 @@ class CreateNamespaceBucketModalViewModel extends ConnectableViewModel {
         const { bucketName, readPolicy, writePolicy, cacheTTL } = values;
         this.dispatch(
             closeModal(),
-            createNamespaceBucket(bucketName, readPolicy, writePolicy, cacheTTL)
+            createNamespaceBucket(bucketName, readPolicy, writePolicy,
+                this.enableCaching() ? {
+                    ttl_ms: cacheTTL
+                } : undefined)
         );
     }
 

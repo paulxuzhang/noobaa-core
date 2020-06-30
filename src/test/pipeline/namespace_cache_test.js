@@ -22,11 +22,11 @@ const {
     AWS_SECRET_ACCESS_KEY,
     COS_ACCESS_KEY_ID,
     COS_SECRET_ACCESS_KEY,
-    CACHE_TTL,
+    CACHE_TTL_MS,
     SYSTEM_NAME,
 } = process.env;
 
-const DEFAULT_CACHE_TTL = 60;
+const DEFAULT_CACHE_TTL_MS = 60000;
 
 const cloud_list = [];
 
@@ -135,7 +135,7 @@ const s3opsCOS = new S3OPS({
     ip: 's3.us-south.cloud-object-storage.appdomain.cloud',
     access_key: COSDefaultConnection.identity,
     secret_key: COSDefaultConnection.secret,
-    system_verify_name: 'AWS',
+    system_verify_name: 'COS',
 });
 
 const connections_mapping = { COS: COSDefaultConnection, AWS: AWSDefaultConnection };
@@ -198,8 +198,7 @@ async function getPropertiesFromS3Bucket(s3ops_arg, bucket, file_name, get_from_
 
 async function compereMD5betweenCloudAndNooBaa(type, cloud_bucket, noobaa_bucket, force_cache_read, file_name) {
     console.log(`Compering NooBaa cache bucket to ${type} for ${file_name}`);
-    let cloudProperties;
-    cloudProperties = await getPropertiesFromS3Bucket(namespace_mapping[type].s3ops, cloud_bucket, file_name, false);
+    const cloudProperties = await getPropertiesFromS3Bucket(namespace_mapping[type].s3ops, cloud_bucket, file_name, false);
     const cloudMD5 = cloudProperties.md5;
     const noobaaProperties = await getPropertiesFromS3Bucket(s3ops, noobaa_bucket, file_name, force_cache_read);
     const noobaaMD5 = noobaaProperties.md5;
@@ -263,7 +262,7 @@ async function uploadFileToNoobaaS3(bucket, file_name) {
     }
 }
 
-async function _delete_namesapace_bucket(bucket) {
+async function _delete_namespace_bucket(bucket) {
     console.log('Deleting namespace bucket ' + bucket);
     try {
         await bucket_functions.deleteBucket(bucket);
@@ -275,7 +274,7 @@ async function _delete_namesapace_bucket(bucket) {
 }
 
 async function set_rpc_and_create_auth_token() {
-    let auth_params = {
+    const auth_params = {
         email: 'demo@noobaa.com',
         password: 'DeMo1',
         system: SYSTEM_NAME ? SYSTEM_NAME : 'demo'
@@ -308,7 +307,7 @@ async function _create_resource(type) {
     try {
         //create a namespace bucket
         await bucket_functions.createNamespaceBucket(namespace_mapping[type].gateway,
-            namespace_mapping[type].namespace, { ttl: CACHE_TTL ? CACHE_TTL : DEFAULT_CACHE_TTL });
+            namespace_mapping[type].namespace, { ttl_ms: CACHE_TTL_MS ? CACHE_TTL_MS : DEFAULT_CACHE_TTL_MS });
         report.success(`create namespace bucket ${type}`);
     } catch (e) {
         console.log("error:", e, "==", e.rpc_code);
@@ -439,7 +438,7 @@ async function _clean_namespace_bucket(bucket, type) {
             }
         }
     }
-    await _delete_namesapace_bucket(bucket);
+    await _delete_namespace_bucket(bucket);
 }
 
 async function clean_env(clouds) {

@@ -751,17 +751,17 @@ module.exports = {
 
         bucket_cache_ttl: {
             type: 'integer',
-            // In seconds, 0 means caching is disabled
-            minimum: 0,
-            // 1 hour in milliseconds
-            maximum: 3600000
+            // In milliseconds
+            // -1 means infinite ttl
+            // 0 means always re-validate
+            minimum: -1,
         },
 
         bucket_cache_config: {
             type: 'object',
-            required: [ 'ttl' ],
+            required: [ ],
             properties: {
-                ttl: {
+                ttl_ms: {
                     $ref: '#/definitions/bucket_cache_ttl'
                 }
             }

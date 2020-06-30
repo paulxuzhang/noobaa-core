@@ -164,12 +164,12 @@ class ObjectSDK {
             if (bucket.namespace && bucket.namespace.read_resources && bucket.namespace.write_resource) {
 
                 dbg.log0('_setup_bucket_namespace', bucket.namespace);
-                if (bucket.namespace.caching && bucket.namespace.caching.ttl) {
+                if (bucket.namespace.caching) {
                     return {
                         ns: new NamespaceCache({
                             namespace_hub: this._setup_single_namespace(_.extend({}, bucket.namespace.write_resource)),
                             namespace_nb: this.namespace_nb,
-                            active_triggers: bucket.namespace.write_resource,
+                            active_triggers: bucket.active_triggers,
                             caching: bucket.namespace.caching,
                         }),
                         bucket,

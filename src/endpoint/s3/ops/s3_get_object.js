@@ -15,18 +15,14 @@ async function get_object(req, res) {
     const noobaa_trigger_agent = agent_header && agent_header.includes('exec-env/NOOBAA_FUNCTION');
     const encryption = s3_utils.parse_encryption(req);
 
-    let get_from_cache = false;
-    if (req.query.get_from_cache === 'true') {
-        get_from_cache = true;
-    }
-    let md_params = {
+    const md_params = {
         bucket: req.params.bucket,
         key: req.params.key,
         version_id: req.query.versionId,
         md_conditions: http_utils.get_md_conditions(req),
         encryption
     };
-    if (get_from_cache) {
+    if (req.query.get_from_cache !== undefined) {
         md_params.get_from_cache = true;
     }
     const object_md = await req.object_sdk.read_object_md(md_params);
@@ -43,7 +39,7 @@ async function get_object(req, res) {
         noobaa_trigger_agent,
         encryption,
     };
-    if (get_from_cache) {
+    if (md_params.get_from_cache) {
         params.get_from_cache = true;
     }
     try {

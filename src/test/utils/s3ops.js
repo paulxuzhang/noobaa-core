@@ -9,6 +9,7 @@ const stream = require('stream');
 const crypto = require('crypto');
 const P = require('../../util/promise');
 const RandStream = require('../../util/rand_stream');
+const querystring = require('querystring');
 
 require('../../util/dotenv').load();
 
@@ -684,18 +685,12 @@ class S3OPS {
             //There can be an issue if the object size (length) is too large
             const obj = await this.s3.getObject(params)
             .on('build', req => {
-                if (query_params) {
-                    for (const [k, v] of Object.entries(query_params)) {
-                        if (v !== '') {
-                            console.log(`Setting query parameter ${k}=${v} for ${key}`);
-                            if (req.httpRequest.search()) {
-                                req.httpRequest.path += `&${k}=${v}`;
-                            } else {
-                                req.httpRequest.path += `?${k}=${v}`;
-                            }
-                        }
-                    }
-                }
+                if (!query_params) return;
+                const sep = req.httpRequest.search() ? '&' : '?';
+                const query_string = querystring.stringify(query_params);
+                const req_path = `${req.httpRequest.path}${sep}${query_string}`;
+                console.log(`Added query params ${query_params} to path ${req_path}`);
+                req.httpRequest.path = req_path;
             }).promise();
             return obj;
         } catch (err) {

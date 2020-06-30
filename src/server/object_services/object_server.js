@@ -413,7 +413,9 @@ async function complete_object_upload(req) {
     }
 
     set_updates.create_time = new Date();
-    set_updates.cache_valid_time = new Date();
+    if (req.bucket.namespace && req.bucket.namespace.caching) {
+        set_updates.cache_last_valid_time = new Date();
+    }
     set_updates.version_seq = await MDStore.instance().alloc_object_version_seq();
     if (req.bucket.versioning === 'ENABLED') {
         set_updates.version_enabled = true;
@@ -730,6 +732,7 @@ async function read_object_mapping(req) {
     MDStore.instance().update_object_by_id(
         obj._id, { 'stats.last_read': date_now },
         undefined, { 'stats.reads': 1 }
+
     );
     MDStore.instance().update_chunks_by_ids(
         chunks.map(chunk => chunk._id), { tier_lru: date_now }
@@ -865,12 +868,12 @@ function _check_encryption_permissions(src_enc, req_enc) {
 async function update_object_md(req) {
     dbg.log0('object_server.update object md', req.rpc_params);
     throw_if_maintenance(req);
-    const set_updates = _.pick(req.rpc_params, 'content_type', 'xattr', 'cache_valid_time');
+    const set_updates = _.pick(req.rpc_params, 'content_type', 'xattr', 'cache_last_valid_time');
     if (set_updates.xattr) {
         set_updates.xattr = _.mapKeys(set_updates.xattr, (v, k) => k.replace(/\./g, '@'));
     }
-    if (set_updates.cache_valid_time) {
-        set_updates.cache_valid_time = new Date(set_updates.cache_valid_time);
+    if (set_updates.cache_last_valid_time) {
+        set_updates.cache_last_valid_time = new Date(set_updates.cache_last_valid_time);
     }
     const obj = await find_object_md(req);
     await MDStore.instance().update_object_by_id(obj._id, set_updates);
@@ -1385,7 +1388,7 @@ function get_object_info(md, options = {}) {
         sha256_b64: md.sha256_b64 || undefined,
         content_type: md.content_type || 'application/octet-stream',
         create_time: md.create_time ? md.create_time.getTime() : md._id.getTimestamp().getTime(),
-        cache_valid_time: md.cache_valid_time ? md.cache_valid_time.getTime() : undefined,
+        cache_last_valid_time: md.cache_last_valid_time ? md.cache_last_valid_time.getTime() : undefined,
         upload_started: md.upload_started ? md.upload_started.getTimestamp().getTime() : undefined,
         upload_size: _.isNumber(md.upload_size) ? md.upload_size : undefined,
         num_parts: md.num_parts,

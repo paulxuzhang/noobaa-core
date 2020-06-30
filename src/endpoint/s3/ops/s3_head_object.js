@@ -10,14 +10,14 @@ const http_utils = require('../../../util/http_utils');
  */
 async function head_object(req, res) {
     const encryption = s3_utils.parse_encryption(req);
-    let params = {
+    const params = {
         bucket: req.params.bucket,
         key: req.params.key,
         version_id: req.query.versionId,
         md_conditions: http_utils.get_md_conditions(req),
         encryption
     };
-    if (req.query.get_from_cache === 'true') {
+    if (req.query.get_from_cache !== undefined) {
         params.get_from_cache = true;
     }
     const object_md = await req.object_sdk.read_object_md(params);

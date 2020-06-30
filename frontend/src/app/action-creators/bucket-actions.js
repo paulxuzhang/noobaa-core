@@ -149,10 +149,10 @@ export function failDeleteBucket(bucket, error) {
     };
 }
 
-export function createNamespaceBucket(name, readFrom, writeTo, cacheTTL) {
+export function createNamespaceBucket(name, readFrom, writeTo, caching) {
     return {
         type: CREATE_NAMESPACE_BUCKET,
-        payload: { name, readFrom, writeTo, cacheTTL }
+        payload: { name, readFrom, writeTo, caching }
     };
 }
 
