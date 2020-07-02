@@ -4,13 +4,14 @@
 const _ = require('lodash');
 const api = require('../../api');
 const crypto = require('crypto');
-//const P = require('../../util/promise');
+const P = require('../../util/promise');
 const { S3OPS } = require('../utils/s3ops');
 const Report = require('../framework/report');
 const argv = require('minimist')(process.argv);
 const dbg = require('../../util/debug_module')(__filename);
 const { CloudFunction } = require('../utils/cloud_functions');
 const { BucketFunctions } = require('../utils/bucket_functions');
+const { ObjectAPIFunctions } = require('../utils/object_api_functions');
 
 const test_name = 'namespace_cache';
 dbg.set_process_name(test_name);
@@ -26,7 +27,8 @@ const {
     SYSTEM_NAME,
 } = process.env;
 
-const DEFAULT_CACHE_TTL_MS = 60000;
+const DEFAULT_CACHE_TTL_MS = 10000;
+let cache_ttl_ms = CACHE_TTL_MS;
 
 const cloud_list = [];
 
@@ -43,7 +45,7 @@ if (cloud_list.length === 0) {
     process.exit(0);
 }
 
-let errors = [];
+const errors = [];
 let failures_in_test = false;
 
 //define colors
@@ -116,8 +118,9 @@ const cases = [
 // report.init_reporter({ suite: test_name, conf: { aws: true, cos: true }, mongo_report: true, cases: cases });
 report.init_reporter({ suite: test_name, conf: { cos: true }, mongo_report: true, cases: cases });
 
-let cf = new CloudFunction(client);
+const cf = new CloudFunction(client);
 const bucket_functions = new BucketFunctions(client);
+const object_functions = new ObjectAPIFunctions(client);
 
 const AWSDefaultConnection = cf.getAWSConnection();
 const COSDefaultConnection = cf.getCOSConnection();
@@ -196,7 +199,20 @@ async function getPropertiesFromS3Bucket(s3ops_arg, bucket, file_name, get_from_
     }
 }
 
-async function compereMD5betweenCloudAndNooBaa(type, cloud_bucket, noobaa_bucket, force_cache_read, file_name) {
+async function validCacheObjectMD(bucket, file_name, validation_params) {
+    try {
+        const md = await object_functions.getObjectMD({ bucket, key: file_name });
+        const { cache_last_valid_time_range } = validation_params;
+        if (!_.inRange(md.cache_last_valid_time, cache_last_valid_time_range.start, cache_last_valid_time_range.end)) {
+            const msg = `expect it between ${cache_last_valid_time_range.start} and ${cache_last_valid_time_range.end}, but got ${md.cache_last_valid_time}`;
+            throw new Error(`Unexpected cache_last_valid_time in object md ${file_name} from bucket ${bucket}: ${msg}`);
+        }
+    } catch (err) {
+        throw new Error(`Failed to get object md ${file_name} from bucket ${bucket}: ${err}`);
+    }
+}
+
+async function compareMD5betweenCloudAndNooBaa(type, cloud_bucket, noobaa_bucket, force_cache_read, file_name) {
     console.log(`Compering NooBaa cache bucket to ${type} for ${file_name}`);
     const cloudProperties = await getPropertiesFromS3Bucket(namespace_mapping[type].s3ops, cloud_bucket, file_name, false);
     const cloudMD5 = cloudProperties.md5;
@@ -254,7 +270,7 @@ async function isFilesAvailableInNooBaaBucket(gateway, files, type) {
 }*/
 
 async function uploadFileToNoobaaS3(bucket, file_name) {
-    let { data_multiplier } = unit_mapping.KB;
+    const { data_multiplier } = unit_mapping.KB;
     try {
         await s3ops.put_file_with_md5(bucket, file_name, 15, data_multiplier);
     } catch (err) {
@@ -306,8 +322,9 @@ async function _create_resource(type) {
     }
     try {
         //create a namespace bucket
+        cache_ttl_ms = _.defaultTo(CACHE_TTL_MS, DEFAULT_CACHE_TTL_MS);
         await bucket_functions.createNamespaceBucket(namespace_mapping[type].gateway,
-            namespace_mapping[type].namespace, { ttl_ms: CACHE_TTL_MS ? CACHE_TTL_MS : DEFAULT_CACHE_TTL_MS });
+            namespace_mapping[type].namespace, { ttl_ms: cache_ttl_ms });
         report.success(`create namespace bucket ${type}`);
     } catch (e) {
         console.log("error:", e, "==", e.rpc_code);
@@ -325,7 +342,7 @@ async function _create_resource(type) {
     await isFilesAvailableInNooBaaBucket(namespace_mapping[type].gateway, files_cloud[`files_${type}`], type);
     for (const file of files_cloud[`files_${type}`]) {
         try {
-            await compereMD5betweenCloudAndNooBaa(type, namespace_mapping[type].bucket2, namespace_mapping[type].gateway, false, file);
+            await compareMD5betweenCloudAndNooBaa(type, namespace_mapping[type].bucket2, namespace_mapping[type].gateway, false, file);
             report.success(`read via namespace ${type}`);
         } catch (err) {
             console.log('Failed upload via cloud , check via noobaa');
@@ -371,15 +388,34 @@ async function check_via_cloud(type, file_name) {
     return true;
 }
 
-async function _upload_via_noobaa_check_via_cache_and_cloud({ type, file_name, bucket }) {
+async function _upload_object_via_namespace_cache_bucket({ type, file_name, bucket }) {
     //Try to upload a file to noobaa s3 server, verify it was uploaded to the cloud
-    //Compare object in cache and cloud
+    //Validate object in cache and cloud
+    let time_start = (new Date()).getTime();
     const uploaded_file_name = await upload_via_noobaa({ type, file_name, bucket });
     await check_via_cloud(type, uploaded_file_name);
-    await compereMD5betweenCloudAndNooBaa(type, namespace_mapping[type].bucket2,
-        namespace_mapping[type].gateway, true, uploaded_file_name);
-    await compereMD5betweenCloudAndNooBaa(type, namespace_mapping[type].bucket2,
-        namespace_mapping[type].gateway, false, uploaded_file_name);
+    await compareMD5betweenCloudAndNooBaa(type, namespace_mapping[type].bucket2,
+        bucket, true, uploaded_file_name);
+    await compareMD5betweenCloudAndNooBaa(type, namespace_mapping[type].bucket2,
+        bucket, false, uploaded_file_name);
+
+    await validCacheObjectMD(bucket, uploaded_file_name, {
+        cache_last_valid_time_range: {
+            start: time_start,
+            end: (new Date()).getTime()
+        }
+    });
+
+    await P.delay(cache_ttl_ms + 1000);
+    time_start = (new Date()).getTime();
+    await s3ops.get_file_check_md5(bucket, uploaded_file_name);
+    // cache_last_valie_time shall be updated after TTL expires during the read
+    await validCacheObjectMD(bucket, uploaded_file_name, {
+        cache_last_valid_time_range: {
+            start: time_start,
+            end: (new Date()).getTime()
+        }
+    });
 }
 
 /*async function update_read_write_and_check(clouds, name, read_resources, write_resource) {
@@ -415,7 +451,7 @@ async function list_cloud_files_read_via_noobaa(type, noobaa_bucket) {
     const files_in_cloud_bucket = await list_files_in_cloud(type);
     for (const file of files_in_cloud_bucket) {
         try {
-            await compereMD5betweenCloudAndNooBaa(type, namespace_mapping[type].bucket2, noobaa_bucket, file);
+            await compareMD5betweenCloudAndNooBaa(type, namespace_mapping[type].bucket2, noobaa_bucket, file);
             report.success(`verify md5 via list on ${type}`);
         } catch (err) {
             report.fail(`verify md5 via list on ${type}`);
@@ -449,12 +485,12 @@ async function clean_env(clouds) {
         } catch (err) {
             report.fail(`delete namespace resource ${type}`);
         }
-        try {
+        /*try {
             await cf.deleteConnection(connections_mapping[type].name);
             report.success(`delete connection ${type}`);
         } catch (err) {
             report.fail(`delete connection ${type}`);
-        }
+        }*/
     }
 }
 
@@ -464,7 +500,7 @@ async function main(clouds) {
         for (const type of clouds) {
             await _create_resource(type);
             //await _upload_check_cache_and_cloud(type);
-            await _upload_via_noobaa_check_via_cache_and_cloud({ type, file: 'file_cos_15KB', bucket: namespace_mapping[type].gateway });
+            await _upload_object_via_namespace_cache_bucket({ type, file: 'file_cos_15KB', bucket: namespace_mapping[type].gateway });
             await _clean_namespace_bucket(namespace_mapping[type].gateway, type);
         }
         if (!skip_clean) {
