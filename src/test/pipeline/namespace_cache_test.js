@@ -13,8 +13,8 @@ const { CloudFunction } = require('../utils/cloud_functions');
 const { BucketFunctions } = require('../utils/bucket_functions');
 const { ObjectAPIFunctions } = require('../utils/object_api_functions');
 
-const test_name = 'namespace_cache';
-dbg.set_process_name(test_name);
+const test_suite_name = 'namespace_cache';
+dbg.set_process_name(test_suite_name);
 
 require('../../util/dotenv').load();
 
@@ -49,8 +49,9 @@ const errors = [];
 let failures_in_test = false;
 
 //define colors
-// const YELLOW = "\x1b[33;1m";
-const RED = "\x1b[31m";
+const YELLOW = "\x1b[33;1m";
+const GREEN = "\x1b[32;1m";
+const RED = "\x1b[31;1m";
 const NC = "\x1b[0m";
 
 const files_cloud = {
@@ -88,35 +89,6 @@ if (help) {
 
 const rpc = api.new_rpc_from_base_address(`wss://${mgmt_ip}:${mgmt_port_https}`, 'EXTERNAL');
 const client = rpc.new_client({});
-
-let report = new Report();
-
-const cases = [
-    'read via namespace AWS',
-    'read via namespace COS',
-    'verify list files AWS',
-    'verify list files COS',
-    'create namespace bucket AWS',
-    'create namespace bucket COS',
-    'update namespace bucket w resource',
-    'upload via noobaa to namespace AWS',
-    'upload via noobaa to namespace COS',
-    'delete via namespace AWS',
-    'delete via namespace COS',
-    'verify md5 via list on AWS',
-    'verify md5 via list on COS',
-    'create external connection AWS',
-    'create external connection COS',
-    'create namespace resource AWS',
-    'create namespace resource COS',
-    'delete namespace resource AWS',
-    'delete namespace resource COS',
-    'delete connection AWS',
-    'delete connection COS',
-    'delete namespace bucket',
-];
-// report.init_reporter({ suite: test_name, conf: { aws: true, cos: true }, mongo_report: true, cases: cases });
-report.init_reporter({ suite: test_name, conf: { cos: true }, mongo_report: true, cases: cases });
 
 const cf = new CloudFunction(client);
 const bucket_functions = new BucketFunctions(client);
@@ -161,6 +133,38 @@ const namespace_mapping = {
         gateway: 'cos-gateway-bucket'
     }
 };
+
+const test_scenarios = [
+    'object cached during upload to namespace bucket',
+    'cache_last_valid_time gets updated after ttl expires',
+    'cache_last_valid_time will not be updated after out-of-band upload and before ttl expires',
+    'cache_last_valid_time and etag get updated after ttl expires and out-of-band upload',
+
+    'delete object from namespace bucket via noobaa endpoint',
+    'create external connection',
+    'delete external connection',
+    'create namespace resource',
+    'delete namespace resource',
+    'create namespace bucket with caching enabled',
+    'delete namespace bucket with caching enabled',
+];
+
+function _test_name(s, cloud_provider) {
+    return `${s} (cloud provider: ${cloud_provider})`;
+}
+
+const report = new Report();
+
+const test_cases = [];
+const test_conf = {};
+for (const t of test_scenarios) {
+    for (const cloud of cloud_list) {
+        test_cases.push(_test_name(t, cloud));
+        test_conf[cloud] = true;
+    }
+}
+
+report.init_reporter({ suite: test_suite_name, conf: test_conf, mongo_report: true, cases: test_cases });
 
 /*const dataSet = [
     { size_units: 'KB', data_size: 1 },
@@ -270,17 +274,6 @@ async function uploadFileToNoobaaS3(bucket, file_name) {
     }
 }
 
-async function _delete_namespace_bucket(bucket) {
-    console.log('Deleting namespace bucket ' + bucket);
-    try {
-        await bucket_functions.deleteBucket(bucket);
-        report.success('delete namespace bucket');
-    } catch (err) {
-        report.fail('delete namespace bucket');
-        throw new Error(`Failed to delete namespace bucket with error ${err}`);
-    }
-}
-
 async function set_rpc_and_create_auth_token() {
     const auth_params = {
         email: 'demo@noobaa.com',
@@ -288,50 +281,6 @@ async function set_rpc_and_create_auth_token() {
         system: SYSTEM_NAME ? SYSTEM_NAME : 'demo'
     };
     return client.create_auth_token(auth_params);
-}
-
-async function _create_resource(type) {
-    let connection_name;
-    try {
-        connection_name = await cf.getConnection(connections_mapping[type].endpoint);
-        if (connection_name) {
-            console.log(`connection ${connections_mapping[type].endpoint} exists under the name ${connection_name}`);
-        } else {
-            //create connection
-            await cf.createConnection(connections_mapping[type], type);
-            connection_name = connections_mapping[type].name;
-            report.success(`create external connection ${type}`);
-        }
-    } catch (e) {
-        report.fail(`create external connection ${type}`);
-        if (!clean_start && e.rpc_code !== 'CONNECTION_ALREADY_EXIST') {
-            throw new Error(e);
-        }
-    }
-    try {
-        // create namespace resource
-        await cf.createNamespaceResource(connection_name,
-            namespace_mapping[type].namespace, namespace_mapping[type].bucket2);
-        report.success(`create namespace resource ${type}`);
-    } catch (e) {
-        report.fail(`create namespace resource ${type}`);
-        if (!clean_start && e.rpc_code !== 'IN_USE') {
-            throw new Error(e);
-        }
-    }
-    try {
-        //create a namespace bucket
-        cache_ttl_ms = _.defaultTo(CACHE_TTL_MS, DEFAULT_CACHE_TTL_MS);
-        await bucket_functions.createNamespaceBucket(namespace_mapping[type].gateway,
-            namespace_mapping[type].namespace, { ttl_ms: cache_ttl_ms });
-        report.success(`create namespace bucket ${type}`);
-    } catch (e) {
-        console.log("error:", e, "==", e.rpc_code);
-        report.fail(`create namespace bucket ${type}`);
-        if (!clean_start && e.rpc_code !== 'BUCKET_ALREADY_OWNED_BY_YOU') {
-            throw new Error(e);
-        }
-    }
 }
 
 /*async function _upload_check_cache_and_cloud(type) {
@@ -366,7 +315,7 @@ async function upload_directly_to_cloud({ type, file_name }) {
     }
 }
 
-async function upload_via_noobaa({ type, file_name, bucket }) {
+async function upload_via_noobaa_endpoint({ type, file_name, bucket }) {
     //Try to upload a file to noobaa s3 server
     if (!file_name) {
         file_name = 'file_namespace_test_' + (Math.floor(Date.now() / 1000));
@@ -376,13 +325,7 @@ async function upload_via_noobaa({ type, file_name, bucket }) {
     }
     console.log(`uploading ${file_name} via noobaa bucket ${bucket}`);
     files_cloud[`files_${type}`].push(file_name);
-    try {
-        await uploadFileToNoobaaS3(bucket, file_name);
-        report.success(`upload via noobaa to namespace ${type}`);
-    } catch (e) {
-        report.fail(`upload via noobaa to namespace ${type}`);
-        throw new Error(`Failed to upload files into ${bucket}: ${e}`);
-    }
+    await uploadFileToNoobaaS3(bucket, file_name);
     return file_name;
 }
 
@@ -403,100 +346,121 @@ async function check_via_cloud(type, file_name) {
     return true;
 }
 
-async function _upload_object_via_namespace_cache_bucket({ type, file_name, bucket }) {
-    // Upload a file to namespace cache bucket
-    // Expect that etags in both hub and noobaa cache bucket match
-    // Expect that cache_last_valid_time is set in object MD
-    let time_start = (new Date()).getTime();
-    const uploaded_file_name = await upload_via_noobaa({ type, file_name, bucket });
-    await check_via_cloud(type, uploaded_file_name);
-    //type, cloud_bucket, noobaa_bucket, force_cache_read, file_name, expect_same
-    await compareMD5BetweenCloudAndNooBaa({
-        type,
-        cloud_bucket: namespace_mapping[type].bucket2,
-        noobaa_bucket: bucket,
-        force_cache_read: true,
-        file_name: uploaded_file_name,
-        expect_same: true
-    });
-    await compareMD5BetweenCloudAndNooBaa({
-        type,
-        cloud_bucket: namespace_mapping[type].bucket2,
-        noobaa_bucket: bucket,
-        force_cache_read: false,
-        file_name: uploaded_file_name,
-        expect_same: true
-    });
+async function _run_test_case(test_name, test_case_fn) {
+    console.log(`+++ ${YELLOW}running test case: ${test_name}${NC}`);
+    try {
+        await test_case_fn();
+        console.log(`--- ${GREEN}test case passed: ${test_name}${NC}`);
+        report.success(test_name);
+    } catch (err) {
+        console.log(`!!! ${RED}test case (${test_name}) failed${NC}: ${err}`);
+        report.fail(test_name);
+    }
+}
 
-    await validCacheObjectMD(bucket, uploaded_file_name, {
-        cache_last_valid_time_range: {
-            start: time_start,
-            end: (new Date()).getTime()
-        }
-    });
-
-    // Wait for cache TTL to expire and read the file again
-    // Expect cache_last_valid_time to be updated in object MD
+async function run_namespace_cache_tests({ type, file_name, bucket }) {
     const delay_ms = cache_ttl_ms + 1000;
-    console.log(`Waiting for TTL to expire in ${delay_ms}ms......`);
-    await P.delay(delay_ms);
-    time_start = (new Date()).getTime();
-    await s3opsNB.get_file_check_md5(bucket, uploaded_file_name);
-    const cache_last_valid_time = await validCacheObjectMD(bucket, uploaded_file_name, {
-        cache_last_valid_time_range: {
-            start: time_start,
-            end: (new Date()).getTime()
-        }
+    let uploaded_file_name;
+    let cache_last_valid_time;
+    let time_start = (new Date()).getTime();
+
+    await _run_test_case(_test_name('object cached during upload to namespace bucket', type), async () => {
+        // Upload a file to namespace cache bucket
+        // Expect that etags in both hub and noobaa cache bucket match
+        // Expect that cache_last_valid_time is set in object MD
+        uploaded_file_name = await upload_via_noobaa_endpoint({ type, file_name, bucket });
+        await check_via_cloud(type, uploaded_file_name);
+        await compareMD5BetweenCloudAndNooBaa({
+            type,
+            cloud_bucket: namespace_mapping[type].bucket2,
+            noobaa_bucket: bucket,
+            force_cache_read: true,
+            file_name: uploaded_file_name,
+            expect_same: true
+        });
+        await compareMD5BetweenCloudAndNooBaa({
+            type,
+            cloud_bucket: namespace_mapping[type].bucket2,
+            noobaa_bucket: bucket,
+            force_cache_read: false,
+            file_name: uploaded_file_name,
+            expect_same: true
+        });
+
+        await validCacheObjectMD(bucket, uploaded_file_name, {
+            cache_last_valid_time_range: {
+                start: time_start,
+                end: (new Date()).getTime()
+            }
+        });
     });
 
-    // Upload the file with different content to hub before cache TTL expires
-    // Expect the cached file with different etag to be returned
-    // Expect cache_last_valid_time to stay the same
-    await upload_directly_to_cloud({ type, file_name: uploaded_file_name });
-    await compareMD5BetweenCloudAndNooBaa({
-        type,
-        cloud_bucket: namespace_mapping[type].bucket2,
-        noobaa_bucket: bucket,
-        force_cache_read: false,
-        file_name: uploaded_file_name,
-        expect_same: false
-    });
-    await validCacheObjectMD(bucket, uploaded_file_name, {
-        cache_last_valid_time_range: {
-            start: cache_last_valid_time - 1,
-            end: cache_last_valid_time + 1
-        }
+    await _run_test_case(_test_name('cache_last_valid_time gets updated after ttl expires', type), async () => {
+        // Wait for cache TTL to expire and read the file again
+        // Expect cache_last_valid_time to be updated in object MD
+        console.log(`Waiting for TTL to expire in ${delay_ms}ms......`);
+        await P.delay(delay_ms);
+        time_start = (new Date()).getTime();
+        await s3opsNB.get_file_check_md5(bucket, uploaded_file_name);
+        cache_last_valid_time = await validCacheObjectMD(bucket, uploaded_file_name, {
+            cache_last_valid_time_range: {
+                start: time_start,
+                end: (new Date()).getTime()
+            }
+        });
     });
 
-    // Wait for cache TTL to expire
-    // Expect that etags in both hub and noobaa cache bucket match
-    // Expect that cache_last_valid_time is updated in object MD
-    console.log(`Waiting for TTL to expire in ${delay_ms}ms......`);
-    await P.delay(delay_ms);
-    time_start = (new Date()).getTime();
-    await compareMD5BetweenCloudAndNooBaa({
-        type,
-        cloud_bucket: namespace_mapping[type].bucket2,
-        noobaa_bucket: bucket,
-        force_cache_read: false,
-        file_name: uploaded_file_name,
-        expect_same: true
-    });
-    await compareMD5BetweenCloudAndNooBaa({
-        type,
-        cloud_bucket: namespace_mapping[type].bucket2,
-        noobaa_bucket: bucket,
-        force_cache_read: true,
-        file_name: uploaded_file_name,
-        expect_same: true
-    });
-    await validCacheObjectMD(bucket, uploaded_file_name, {
-        cache_last_valid_time_range: {
-            start: time_start,
-            end: (new Date()).getTime()
-        }
+    await _run_test_case(_test_name('cache_last_valid_time will not be updated after out-of-band upload and before ttl expires', type), async () => {
+        // Upload the file with different content to hub before cache TTL expires
+        // Expect the cached file with different etag to be returned
+        // Expect cache_last_valid_time to stay the same
+        await upload_directly_to_cloud({ type, file_name: uploaded_file_name });
+        await compareMD5BetweenCloudAndNooBaa({
+            type,
+            cloud_bucket: namespace_mapping[type].bucket2,
+            noobaa_bucket: bucket,
+            force_cache_read: false,
+            file_name: uploaded_file_name,
+            expect_same: false
+        });
+        await validCacheObjectMD(bucket, uploaded_file_name, {
+            cache_last_valid_time_range: {
+                start: cache_last_valid_time - 1,
+                end: cache_last_valid_time + 1
+            }
+        });
     });
 
+    await _run_test_case(_test_name('cache_last_valid_time and etag get updated after ttl expires and out-of-band upload', type), async () => {
+        // Wait for cache TTL to expire
+        // Expect that etags in both hub and noobaa cache bucket match
+        // Expect that cache_last_valid_time is updated in object MD
+        console.log(`Waiting for TTL to expire in ${delay_ms}ms......`);
+        await P.delay(delay_ms);
+        time_start = (new Date()).getTime();
+        await compareMD5BetweenCloudAndNooBaa({
+            type,
+            cloud_bucket: namespace_mapping[type].bucket2,
+            noobaa_bucket: bucket,
+            force_cache_read: false,
+            file_name: uploaded_file_name,
+            expect_same: true
+        });
+        await compareMD5BetweenCloudAndNooBaa({
+            type,
+            cloud_bucket: namespace_mapping[type].bucket2,
+            noobaa_bucket: bucket,
+            force_cache_read: true,
+            file_name: uploaded_file_name,
+            expect_same: true
+        });
+        await validCacheObjectMD(bucket, uploaded_file_name, {
+            cache_last_valid_time_range: {
+                start: time_start,
+                end: (new Date()).getTime()
+            }
+        });
+    });
 }
 
 /*async function update_read_write_and_check(clouds, name, read_resources, write_resource) {
@@ -511,7 +475,7 @@ async function _upload_object_via_namespace_cache_bucket({ type, file_name, buck
     }
     await P.delay(30 * 1000);
     console.error(`${RED}TODO: REMOVE THIS DELAY, IT IS TEMP OVERRIDE FOR BUG #4831${NC}`);
-    const uploaded_file_name = await upload_via_noobaa({ type: run_on_clouds[0], bucket: name });
+    const uploaded_file_name = await upload_via_noobaa_endpoint({ type: run_on_clouds[0], bucket: name });
     //checking that the file was written into the read/write cloud
     await check_via_cloud(run_on_clouds[0], uploaded_file_name);
     run_on_clouds.shift();
@@ -541,37 +505,92 @@ async function list_cloud_files_read_via_noobaa(type, noobaa_bucket) {
     }
 }*/
 
-async function _clean_namespace_bucket(bucket, type) {
+async function create_resources(type) {
+    let connection_name;
+    try {
+        connection_name = await cf.getConnection(connections_mapping[type].endpoint);
+        if (connection_name) {
+            console.log(`connection ${connections_mapping[type].endpoint} exists under the name ${connection_name}`);
+        } else {
+            //create connection
+            await cf.createConnection(connections_mapping[type], type);
+            connection_name = connections_mapping[type].name;
+        }
+        report.success(_test_name('create external connection', type));
+    } catch (e) {
+        report.fail(_test_name('create external connection', type));
+        if (!clean_start && e.rpc_code !== 'CONNECTION_ALREADY_EXIST') {
+            throw new Error(e);
+        }
+    }
+    try {
+        // create namespace resource
+        await cf.createNamespaceResource(connection_name,
+            namespace_mapping[type].namespace, namespace_mapping[type].bucket2);
+        report.success(_test_name('create namespace resource', type));
+    } catch (e) {
+        report.fail(_test_name('create namespace resource', type));
+        if (!clean_start && e.rpc_code !== 'IN_USE') {
+            throw new Error(e);
+        }
+    }
+    try {
+        //create a namespace bucket
+        cache_ttl_ms = _.defaultTo(CACHE_TTL_MS, DEFAULT_CACHE_TTL_MS);
+        await bucket_functions.createNamespaceBucket(namespace_mapping[type].gateway,
+            namespace_mapping[type].namespace, { ttl_ms: cache_ttl_ms });
+        report.success(_test_name('create namespace bucket with caching enabled', type));
+    } catch (e) {
+        console.log("error:", e, "==", e.rpc_code);
+        report.fail(_test_name('create namespace bucket with caching enabled', type));
+        if (!clean_start && e.rpc_code !== 'BUCKET_ALREADY_OWNED_BY_YOU') {
+            throw new Error(e);
+        }
+    }
+}
+
+async function delete_resources(clouds) {
+    for (const type of clouds) {
+        try {
+            await cf.deleteNamespaceResource(namespace_mapping[type].namespace);
+            report.success(_test_name('delete namespace resource', type));
+        } catch (err) {
+            report.fail(_test_name('delete namespace resource', type));
+        }
+        /*try {
+            await cf.deleteConnection(connections_mapping[type].name);
+            report.success(_test_name('delete external connection', type));
+        } catch (err) {
+            report.fail(_test_name('delete external connection', type));
+        }*/
+    }
+}
+
+async function delete_namespace_bucket(bucket, type) {
+    console.log('Deleting namespace bucket ' + bucket);
+    await clean_namespace_bucket(bucket, type);
+
+    try {
+        await bucket_functions.deleteBucket(bucket);
+        report.success(_test_name('delete namespace bucket with caching enabled', type));
+    } catch (err) {
+        report.fail(_test_name('delete namespace bucket with caching enabled', type));
+        throw new Error(`Failed to delete namespace bucket ${bucket} with error ${err}`);
+    }
+}
+
+async function clean_namespace_bucket(bucket, type) {
     const list_files = await s3opsNB.get_list_files(bucket);
     const keys = list_files.map(key => key.Key);
     if (keys) {
         for (const file of keys) {
             try {
-                report.success(`delete via namespace ${type}`);
                 await s3opsNB.delete_file(bucket, file);
             } catch (e) {
-                report.fail(`delete via namespace ${type}`);
-                console.error(`${RED}TODO: REMOVE THIS TRY CATCH, IT IS TEMP OVERRIDE FOR BUG #4832${NC}`);
+                report.fail(_test_name('delete object from namespace bucket via noobaa endpoint', type));
             }
         }
-    }
-    await _delete_namespace_bucket(bucket);
-}
-
-async function clean_env(clouds) {
-    for (const type of clouds) {
-        try {
-            await cf.deleteNamespaceResource(namespace_mapping[type].namespace);
-            report.success(`delete namespace resource ${type}`);
-        } catch (err) {
-            report.fail(`delete namespace resource ${type}`);
-        }
-        /*try {
-            await cf.deleteConnection(connections_mapping[type].name);
-            report.success(`delete connection ${type}`);
-        } catch (err) {
-            report.fail(`delete connection ${type}`);
-        }*/
+        report.success(_test_name('delete object from namespace bucket via noobaa endpoint', type));
     }
 }
 
@@ -579,16 +598,14 @@ async function main(clouds) {
     try {
         await set_rpc_and_create_auth_token();
         for (const type of clouds) {
-            await _create_resource(type);
-            //await _upload_check_cache_and_cloud(type);
-            await _upload_object_via_namespace_cache_bucket({ type, file: 'file_cos_15KB', bucket: namespace_mapping[type].gateway });
-            await _clean_namespace_bucket(namespace_mapping[type].gateway, type);
+            await create_resources(type);
+            await run_namespace_cache_tests({ type, file: 'file_cos_15KB', bucket: namespace_mapping[type].gateway });
         }
         if (!skip_clean) {
-            /*for (const type of clouds) {
-                await _clean_namespace_bucket(bucket, type);
-            }*/
-            await clean_env(clouds);
+            for (const type of clouds) {
+                await delete_namespace_bucket(namespace_mapping[type].gateway, type);
+            }
+            await delete_resources(clouds);
         }
         await report.report();
         if (failures_in_test) {
