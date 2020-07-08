@@ -140,6 +140,10 @@ const test_scenarios = [
     'cache_last_valid_time gets updated after ttl expires',
     'cache_last_valid_time will not be updated after out-of-band upload and before ttl expires',
     'cache_last_valid_time and etag get updated after ttl expires and out-of-band upload',
+    'object removed from hub after ttl expires',
+    'get operation: object not found',
+    'delete operation success',
+    'delete non-exist object',
 
     'delete object from namespace bucket via noobaa endpoint',
     'create external connection',
@@ -192,25 +196,34 @@ const unit_mapping = {
 
 async function get_object_md5_size(s3ops_arg, bucket, file_name, get_from_cache) {
     try {
-        const object_list = await s3ops_arg.get_object(bucket, file_name, get_from_cache ? { get_from_cache: true } : undefined);
+        const obj = await s3ops_arg.get_object(bucket, file_name, get_from_cache ? { get_from_cache: true } : undefined);
         console.log(`Getting md5 data from ${file_name} in ${bucket}`);
         return {
-            md5: crypto.createHash('md5').update(object_list.Body).digest('base64'),
-            size: object_list.Body.length
+            md5: crypto.createHash('md5').update(obj.Body).digest('base64'),
+            size: obj.Body.length
         };
     } catch (err) {
         throw new Error(`Getting md5 data from ${file_name} in ${bucket}: ${err}`);
     }
 }
 
-async function valid_cache_object_md(bucket, file_name, validation_params) {
-    const md = await object_functions.getObjectMD({ bucket, key: file_name });
+async function get_object_expect_not_found(s3ops_arg, bucket, file_name) {
+    try {
+        const obj = await s3ops_arg.get_object(bucket, file_name);
+        throw new Error(`Expect file ${file_name} not found in ${bucket}, but found with size: ${obj.ContentLength}`);
+    } catch (err) {
+        if (err.code === 'NoSuchKey') return true;
+        throw err;
+    }
+}
+
+async function valid_cache_object_md({ noobaa_bucket, file_name, validation_params }) {
+    const md = await object_functions.getObjectMD({ bucket: noobaa_bucket, key: file_name });
     const { cache_last_valid_time_range } = validation_params;
     if (!_.inRange(md.cache_last_valid_time, cache_last_valid_time_range.start, cache_last_valid_time_range.end)) {
         const msg = `expect it between ${cache_last_valid_time_range.start} and ${cache_last_valid_time_range.end}, but got ${md.cache_last_valid_time}`;
-        throw new Error(`Unexpected cache_last_valid_time in object md ${file_name} from bucket ${bucket}: ${msg}`);
+        throw new Error(`Unexpected cache_last_valid_time in object md ${file_name} from bucket ${noobaa_bucket}: ${msg}`);
     }
-
     return md;
 }
 
@@ -364,18 +377,21 @@ async function _run_test_case(test_name, test_case_fn) {
 }
 
 async function run_namespace_cache_tests_non_range_read(type) {
+    const cloudS3Ops = namespace_mapping[type].s3ops;
     const noobaa_bucket = namespace_mapping[type].gateway;
     const cloud_bucket = namespace_mapping[type].bucket2;
 
     const delay_ms = cache_ttl_ms + 1000;
     // file size MUST be larger than the size of first range data, i.e. config.INLINE_MAX_SIZE
-    const file_name1 = `file1_${type}_8_KB`;
-    const file_name2 = `file2_${type}_9_KB`;
+    const file_name1 = `file_${type}_8_KB`;
+    const file_name2 = `file_${type}_9_KB`;
+    const file_name_delete_case1 = `file_delete_${type}_7_KB`;
+    const file_name_delete_case2 = `file_delete_${type}_6_KB`;
     let cache_last_valid_time;
     let time_start = (new Date()).getTime();
 
     // Clean up
-    for (const file of [file_name1, file_name2]) {
+    for (const file of [file_name1, file_name2, file_name_delete_case1, file_name_delete_case2]) {
         await s3opsNB.delete_file(noobaa_bucket, file);
     }
 
@@ -383,14 +399,15 @@ async function run_namespace_cache_tests_non_range_read(type) {
         // Upload a file to namespace cache bucket
         // Expect that etags in both hub and noobaa cache bucket match
         // Expect that cache_last_valid_time is set in object MD
-        await upload_via_noobaa_endpoint({ type, file_name: file_name1, noobaa_bucket });
+        const file_name = file_name1;
+        await upload_via_noobaa_endpoint({ type, file_name, noobaa_bucket });
         await check_via_cloud(type, file_name1);
         await validate_md5_between_hub_and_cache({
             type,
             cloud_bucket,
             noobaa_bucket,
             force_cache_read: true,
-            file_name: file_name1,
+            file_name,
             expect_same: true
         });
         await validate_md5_between_hub_and_cache({
@@ -398,14 +415,17 @@ async function run_namespace_cache_tests_non_range_read(type) {
             cloud_bucket,
             noobaa_bucket,
             force_cache_read: false,
-            file_name: file_name1,
+            file_name,
             expect_same: true
         });
-
-        await valid_cache_object_md(noobaa_bucket, file_name1, {
-            cache_last_valid_time_range: {
-                start: time_start,
-                end: (new Date()).getTime()
+        await valid_cache_object_md({
+            noobaa_bucket,
+            file_name,
+            validation_params: {
+                cache_last_valid_time_range: {
+                    start: time_start,
+                    end: (new Date()).getTime()
+                }
             }
         });
     });
@@ -413,14 +433,19 @@ async function run_namespace_cache_tests_non_range_read(type) {
     await _run_test_case(_test_name('cache_last_valid_time gets updated after ttl expires', type), async () => {
         // Wait for cache TTL to expire and read the file again
         // Expect cache_last_valid_time to be updated in object MD
+        const file_name = file_name1;
         console.log(`Waiting for TTL to expire in ${delay_ms}ms......`);
         await P.delay(delay_ms);
         time_start = (new Date()).getTime();
-        await s3opsNB.get_file_check_md5(noobaa_bucket, file_name1);
-        const md = await valid_cache_object_md(noobaa_bucket, file_name1, {
-            cache_last_valid_time_range: {
-                start: time_start,
-                end: (new Date()).getTime()
+        await s3opsNB.get_file_check_md5(noobaa_bucket, file_name);
+        const md = await valid_cache_object_md({
+            noobaa_bucket,
+            file_name,
+            validation_params: {
+                cache_last_valid_time_range: {
+                    start: time_start,
+                    end: (new Date()).getTime()
+                }
             }
         });
         cache_last_valid_time = md.cache_last_valid_time;
@@ -430,19 +455,24 @@ async function run_namespace_cache_tests_non_range_read(type) {
         // Upload the file with different content to hub before cache TTL expires
         // Expect the cached file with different etag to be returned
         // Expect cache_last_valid_time to stay the same
-        await upload_directly_to_cloud({ type, file_name: file_name1 });
+        const file_name = file_name1;
+        await upload_directly_to_cloud({ type, file_name });
         await validate_md5_between_hub_and_cache({
             type,
             cloud_bucket,
             noobaa_bucket,
             force_cache_read: false,
-            file_name: file_name1,
+            file_name,
             expect_same: false
         });
-        await valid_cache_object_md(noobaa_bucket, file_name1, {
-            cache_last_valid_time_range: {
-                start: cache_last_valid_time - 1,
-                end: cache_last_valid_time + 1
+        await valid_cache_object_md({
+            noobaa_bucket,
+            file_name,
+            validation_params: {
+                cache_last_valid_time_range: {
+                    start: cache_last_valid_time - 1,
+                    end: cache_last_valid_time + 1
+                }
             }
         });
     });
@@ -451,6 +481,7 @@ async function run_namespace_cache_tests_non_range_read(type) {
         // Wait for cache TTL to expire
         // Expect that etags in both hub and noobaa cache bucket match
         // Expect that cache_last_valid_time is updated in object MD
+        const file_name = file_name1;
         console.log(`Waiting for TTL to expire in ${delay_ms}ms......`);
         await P.delay(delay_ms);
         time_start = (new Date()).getTime();
@@ -459,7 +490,7 @@ async function run_namespace_cache_tests_non_range_read(type) {
             cloud_bucket,
             noobaa_bucket,
             force_cache_read: false,
-            file_name: file_name1,
+            file_name,
             expect_same: true
         });
         await validate_md5_between_hub_and_cache({
@@ -467,13 +498,17 @@ async function run_namespace_cache_tests_non_range_read(type) {
             cloud_bucket,
             noobaa_bucket,
             force_cache_read: true,
-            file_name: file_name1,
+            file_name,
             expect_same: true
         });
-        await valid_cache_object_md(noobaa_bucket, file_name1, {
-            cache_last_valid_time_range: {
-                start: time_start,
-                end: (new Date()).getTime()
+        await valid_cache_object_md({
+            noobaa_bucket,
+            file_name,
+            validation_params: {
+                cache_last_valid_time_range: {
+                    start: time_start,
+                    end: (new Date()).getTime()
+                }
             }
         });
     });
@@ -482,22 +517,27 @@ async function run_namespace_cache_tests_non_range_read(type) {
         // Upload a file to hub bucket and read it from namespace bucket
         // Expect that etags in both hub and noobaa cache bucket match
         // Expect that cache_last_valid_time is set in object MD
-        await upload_directly_to_cloud({ type, file_name: file_name2 });
+        const file_name = file_name2;
+        await upload_directly_to_cloud({ type, file_name });
         time_start = (new Date()).getTime();
         await validate_md5_between_hub_and_cache({
             type,
             cloud_bucket,
             noobaa_bucket,
             force_cache_read: false,
-            file_name: file_name2,
+            file_name,
             expect_same: true
         });
         await promise_utils.wait_until(async () => {
             try {
-                await valid_cache_object_md(noobaa_bucket, file_name2, {
-                    cache_last_valid_time_range: {
-                        start: time_start,
-                        end: (new Date()).getTime()
+                await valid_cache_object_md({
+                    noobaa_bucket,
+                    file_name,
+                    validation_params: {
+                        cache_last_valid_time_range: {
+                            start: time_start,
+                            end: (new Date()).getTime()
+                        }
                     }
                 });
                 return true;
@@ -506,6 +546,51 @@ async function run_namespace_cache_tests_non_range_read(type) {
                 throw err;
             }
         }, 10000);
+    });
+
+    await _run_test_case(_test_name('object removed from hub after ttl expires', type), async () => {
+        // Upload a file to cache bucket and delete it from hub bucket
+        // Expect 404 to be returned for read from cache bucket after TTL expires
+        const file_name = file_name_delete_case1;
+        await upload_via_noobaa_endpoint({ type, file_name, bucket: noobaa_bucket });
+        await validate_md5_between_hub_and_cache({
+            type,
+            cloud_bucket,
+            noobaa_bucket,
+            force_cache_read: true,
+            file_name,
+            expect_same: true
+        });
+        console.log(`Waiting for TTL to expire in ${delay_ms}ms......`);
+        await P.delay(delay_ms);
+        await cloudS3Ops.delete_file(cloud_bucket, file_name);
+        await get_object_expect_not_found(s3opsNB, noobaa_bucket, file_name);
+    });
+
+    await _run_test_case(_test_name('delete operation success', type), async () => {
+        const file_name = file_name_delete_case2;
+        await upload_via_noobaa_endpoint({ type, file_name, bucket: noobaa_bucket });
+        await validate_md5_between_hub_and_cache({
+            type,
+            cloud_bucket,
+            noobaa_bucket,
+            force_cache_read: true,
+            file_name,
+            expect_same: true
+        });
+        await s3opsNB.delete_file(noobaa_bucket, file_name);
+        await get_object_expect_not_found(s3opsNB, noobaa_bucket, file_name);
+        await get_object_expect_not_found(cloudS3Ops, cloud_bucket, file_name);
+    });
+
+    await _run_test_case(_test_name('get operation: object not found', type), async () => {
+        const file_name = 'file_not_exist_123';
+        await get_object_expect_not_found(s3opsNB, noobaa_bucket, file_name);
+    });
+
+    await _run_test_case(_test_name('delete non-exist object', type), async () => {
+        const file_name = 'file_not_exist_123';
+        await s3opsNB.delete_file(noobaa_bucket, file_name);
     });
 
 }
