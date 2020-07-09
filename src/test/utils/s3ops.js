@@ -707,7 +707,7 @@ class S3OPS {
             VersionId: versionid ? versionid : undefined,
         };
         try {
-            console.log(`Reading object ${key} ${versionid ? versionid : ''} from ${start_byte} to ${finish_byte}`);
+            console.log(`Reading object ${key} ${versionid ? versionid : ''} from ${start_byte} to ${finish_byte} from ${bucket}`);
             const obj = await this.s3.getObject(params).promise();
             return obj.Body;
         } catch (err) {

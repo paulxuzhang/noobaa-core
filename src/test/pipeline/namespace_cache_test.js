@@ -13,6 +13,8 @@ const dbg = require('../../util/debug_module')(__filename);
 const { CloudFunction } = require('../utils/cloud_functions');
 const { BucketFunctions } = require('../utils/bucket_functions');
 const { ObjectAPIFunctions } = require('../utils/object_api_functions');
+const config = require('../../../config.js');
+const { assert } = require('console');
 
 const test_suite_name = 'namespace_cache';
 dbg.set_process_name(test_suite_name);
@@ -94,30 +96,30 @@ const cf = new CloudFunction(client);
 const bucket_functions = new BucketFunctions(client);
 const object_functions = new ObjectAPIFunctions(client);
 
-const AWSDefaultConnection = cf.getAWSConnection();
-const COSDefaultConnection = cf.getCOSConnection();
+const aws_connection = cf.getAWSConnection();
+const cos_connection = cf.getCOSConnection();
 
-const s3opsNB = new S3OPS({ ip: s3_ip, port: s3_port, use_https: false, sig_ver: 'v2',
-        access_key: 'vZnfG4rgxGL9NP0a2sHh', secret_key: 'V19A8Fi3gsjD7w5OxjBH9WT3XJ3sSWCtNuvQmDys'});
-const s3opsAWS = new S3OPS({
+const s3ops_nb = new S3OPS({ ip: s3_ip, port: s3_port, use_https: false, sig_ver: 'v2',
+        access_key: 'kD7qH0XqBJPoWTLxkRF5', secret_key: '+Zn085rPHJiASbGAwvIoEg0Iok3t3NW6gbHGszLN'});
+const s3ops_aws = new S3OPS({
     ip: 's3.amazonaws.com',
-    access_key: AWSDefaultConnection.identity,
-    secret_key: AWSDefaultConnection.secret,
+    access_key: aws_connection.identity,
+    secret_key: aws_connection.secret,
     system_verify_name: 'AWS',
 });
-const s3opsCOS = new S3OPS({
+const s3ops_cos = new S3OPS({
     ip: 's3.us-east.cloud-object-storage.appdomain.cloud',
-    access_key: COSDefaultConnection.identity,
-    secret_key: COSDefaultConnection.secret,
+    access_key: cos_connection.identity,
+    secret_key: cos_connection.secret,
     system_verify_name: 'COS',
 });
 
-const connections_mapping = { COS: COSDefaultConnection, AWS: AWSDefaultConnection };
+const connections_mapping = { COS: cos_connection, AWS: aws_connection };
 
 //variables for using creating namespace resource
 const namespace_mapping = {
     AWS: {
-        s3ops: s3opsAWS,
+        s3ops: s3ops_aws,
         pool: 'cloud-resource-aws',
         bucket1: 'QA-Bucket',
         bucket2: 'qa-aws-bucket',
@@ -125,7 +127,7 @@ const namespace_mapping = {
         gateway: 'aws-gateway-bucket'
     },
     COS: {
-        s3ops: s3opsCOS,
+        s3ops: s3ops_cos,
         pool: 'cloud-resource-cos',
         bucket1: 'nb-ft-test1',
         bucket2: 'nb-ft-test2',
@@ -144,6 +146,8 @@ const test_scenarios = [
     'get operation: object not found',
     'delete operation success',
     'delete non-exist object',
+
+    'range read: initial read size is < block_size and not across block boundary',
 
     'delete object from namespace bucket via noobaa endpoint',
     'create external connection',
@@ -171,13 +175,6 @@ for (const t of test_scenarios) {
 
 report.init_reporter({ suite: test_suite_name, conf: test_conf, mongo_report: true, cases: test_cases });
 
-/*const dataSet = [
-    { size_units: 'KB', data_size: 1 },
-    { size_units: 'KB', data_size: 500 },
-    { size_units: 'MB', data_size: 1 },
-    { size_units: 'MB', data_size: 100 },
-];*/
-
 const baseUnit = 1024;
 const unit_mapping = {
     KB: {
@@ -194,23 +191,23 @@ const unit_mapping = {
     }
 };
 
-async function get_object_md5_size(s3ops_arg, bucket, file_name, get_from_cache) {
+async function get_object_md(s3ops_arg, bucket, file_name, get_from_cache) {
     try {
-        const obj = await s3ops_arg.get_object(bucket, file_name, get_from_cache ? { get_from_cache: true } : undefined);
-        console.log(`Getting md5 data from ${file_name} in ${bucket}`);
+        const ret = await s3ops_arg.get_object(bucket, file_name, get_from_cache ? { get_from_cache: true } : undefined);
         return {
-            md5: crypto.createHash('md5').update(obj.Body).digest('base64'),
-            size: obj.Body.length
+            md5: crypto.createHash('md5').update(ret.Body).digest('base64'),
+            size: ret.Body.length,
+            etag: ret.ETag,
         };
     } catch (err) {
-        throw new Error(`Getting md5 data from ${file_name} in ${bucket}: ${err}`);
+        throw new Error(`Failed to get data from ${file_name} in ${bucket}: ${err}`);
     }
 }
 
 async function get_object_expect_not_found(s3ops_arg, bucket, file_name) {
     try {
-        const obj = await s3ops_arg.get_object(bucket, file_name);
-        throw new Error(`Expect file ${file_name} not found in ${bucket}, but found with size: ${obj.ContentLength}`);
+        const ret = await s3ops_arg.get_object(bucket, file_name);
+        throw new Error(`Expect file ${file_name} not found in ${bucket}, but found with size: ${ret.ContentLength}`);
     } catch (err) {
         if (err.code === 'NoSuchKey') return true;
         throw err;
@@ -219,46 +216,80 @@ async function get_object_expect_not_found(s3ops_arg, bucket, file_name) {
 
 async function valid_cache_object_md({ noobaa_bucket, file_name, validation_params }) {
     const md = await object_functions.getObjectMD({ bucket: noobaa_bucket, key: file_name });
-    const { cache_last_valid_time_range } = validation_params;
-    if (!_.inRange(md.cache_last_valid_time, cache_last_valid_time_range.start, cache_last_valid_time_range.end)) {
-        const msg = `expect it between ${cache_last_valid_time_range.start} and ${cache_last_valid_time_range.end}, but got ${md.cache_last_valid_time}`;
-        throw new Error(`Unexpected cache_last_valid_time in object md ${file_name} from bucket ${noobaa_bucket}: ${msg}`);
+    const { cache_last_valid_time_range, partial_object, num_parts, size, etag } = validation_params;
+    if (cache_last_valid_time_range) {
+        if (!_.inRange(md.cache_last_valid_time, cache_last_valid_time_range.start, cache_last_valid_time_range.end)) {
+            const msg = `expect it between ${cache_last_valid_time_range.start} and ${cache_last_valid_time_range.end}, but got ${md.cache_last_valid_time}`;
+            throw new Error(`Unexpected cache_last_valid_time in object md ${file_name} from bucket ${noobaa_bucket}: ${msg}`);
+        }
+    }
+    for (const [k, v] of Object.entries({ partial_object, num_parts, size, etag })) {
+        if (!_.isUndefined(v)) {
+            console.log(`Validating ${k}: expect ${v}, has ${md[k]} in md`);
+            assert(v === md[k]);
+        }
     }
     return md;
 }
 
 async function validate_md5_between_hub_and_cache({ type, cloud_bucket, noobaa_bucket, force_cache_read, file_name, expect_same }) {
     console.log(`Comparing NooBaa cache bucket to ${type} bucket for ${file_name}`);
-    const cloudProperties = await get_object_md5_size(namespace_mapping[type].s3ops, cloud_bucket, file_name, false);
-    const cloudMD5 = cloudProperties.md5;
-    const noobaaProperties = await get_object_md5_size(s3opsNB, noobaa_bucket, file_name, force_cache_read);
-    const noobaaMD5 = noobaaProperties.md5;
-    console.log(`Noobaa cache bucket for (${noobaa_bucket}) contains the md5 ${
-        noobaaMD5} and the cloud md5 is: ${JSON.stringify(cloudProperties)} for file ${file_name}`);
-    console.log(`file: ${file_name} size is ${cloudProperties.size} on ${
-            type} and ${noobaaProperties.size} on noobaa`);
+    const cloud_md = await get_object_md(namespace_mapping[type].s3ops, cloud_bucket, file_name, false);
+    const cloud_md5 = cloud_md.md5;
+    const noobaa_md = await get_object_md(s3ops_nb, noobaa_bucket, file_name, force_cache_read);
+    const noobaa_md5 = noobaa_md.md5;
+    console.log(`Noobaa cache bucket (${noobaa_bucket}) has md5 ${
+        noobaa_md5} and the hub bucket ${cloud_bucket} has md5 ${cloud_md5} for file ${file_name}`);
+    console.log(`file: ${file_name} size is ${cloud_md.size} on ${
+            type} and ${noobaa_md.size} on noobaa`);
 
-    if (expect_same && cloudMD5 !== noobaaMD5) {
-        throw new Error(`Expect md5 ${noobaaMD5} in NooBaa cache bucket (${noobaa_bucket}) is the same as md5 ${
-            cloudMD5} in the cloud hub bucket for file ${file_name}`);
-    } else if (!expect_same && cloudMD5 === noobaaMD5) {
-        throw new Error(`Expect md5 ${noobaaMD5} in NooBaa cache bucket (${noobaa_bucket}) is different than md5 ${
-            cloudMD5} in the cloud hub bucket for file ${file_name}`);
+    if (expect_same && cloud_md5 !== noobaa_md5) {
+        throw new Error(`Expect md5 ${noobaa_md5} in NooBaa cache bucket (${noobaa_bucket}) is the same as md5 ${
+            cloud_md5} in hub bucket ${cloud_bucket} for file ${file_name}`);
+    } else if (!expect_same && cloud_md5 === noobaa_md5) {
+        throw new Error(`Expect md5 ${noobaa_md5} in NooBaa cache bucket (${noobaa_bucket}) is different than md5 ${
+            cloud_md5} in hub bucket ${cloud_bucket} for file ${file_name}`);
+    }
+
+    return { cloud_md, noobaa_md };
+}
+
+// end is inclusive
+async function get_range_md5_size(s3ops_arg, bucket, file_name, start, end) {
+    try {
+        const ret_body = await s3ops_arg.get_object_range(bucket, file_name, start, end);
+        return {
+            md5: crypto.createHash('md5').update(ret_body).digest('base64'),
+            size: ret_body.length
+        };
+    } catch (err) {
+        throw new Error(`Failed to get range data from ${file_name} in ${bucket}: ${err}`);
     }
 }
 
-/*async function uploadDataSetToCloud(type, bucket) {
-    for (const size of dataSet) {
-        const { data_multiplier } = unit_mapping[size.size_units.toUpperCase()];
-        const file_name = 'file_' + size.data_size + size.size_units + (Math.floor(Date.now() / 1000));
-        files_cloud[`files_${type}`].push(file_name);
-        await namespace_mapping[type].s3ops.put_file_with_md5(bucket, file_name, size.data_size, data_multiplier);
+async function validate_md5_range_read_between_hub_and_cache({ type, cloud_bucket, noobaa_bucket, file_name, start, end, expect_same }) {
+    console.log(`Comparing NooBaa cache bucket to ${type} bucket for range ${start}-${end} in ${file_name}`);
+    const cloud_md = await get_range_md5_size(namespace_mapping[type].s3ops, cloud_bucket, file_name, start, end);
+    const cloud_md5 = cloud_md.md5;
+    const noobaa_md = await get_range_md5_size(s3ops_nb, noobaa_bucket, file_name, start, end);
+    const noobaa_md5 = noobaa_md.md5;
+    console.log(`Noobaa cache bucket (${noobaa_bucket}) contains the md5 ${
+        noobaa_md5} and the hub bucket ${cloud_bucket} has md5 ${cloud_md5} for range ${start}-${end} in file ${file_name}`);
+    console.log(`${file_name}: read range size is ${cloud_md.size} on ${type} and ${noobaa_md.size} on noobaa`);
+
+    if (expect_same && cloud_md5 !== noobaa_md5) {
+        throw new Error(`Expect md5 ${noobaa_md5} in NooBaa cache bucket (${noobaa_bucket}) is the same as md5 ${
+            cloud_md5} in hub bucket ${cloud_bucket} for range ${start}-${end} in file ${file_name}`);
+    } else if (!expect_same && cloud_md5 === noobaa_md5) {
+        throw new Error(`Expect md5 ${noobaa_md5} in NooBaa cache bucket (${noobaa_bucket}) is different than md5 ${
+            cloud_md5} in hub bucket ${cloud_bucket} for range ${start}-${end} in file ${file_name}`);
     }
+    return { cloud_md, noobaa_md };
 }
 
-async function isFilesAvailableInNooBaaBucket(gateway, files, type) {
+/*async function isFilesAvailableInNooBaaBucket(gateway, files, type) {
     console.log(`Checking uploaded files ${files} in noobaa s3 server bucket ${gateway}`);
-    const list_files = await s3opsNB.get_list_files(gateway);
+    const list_files = await s3ops_nb.get_list_files(gateway);
     const keys = list_files.map(key => key.Key);
     let report_fail = false;
     for (const file of files) {
@@ -284,22 +315,6 @@ async function set_rpc_and_create_auth_token() {
     return client.create_auth_token(auth_params);
 }
 
-/*async function _upload_check_cache_and_cloud(type) {
-    //upload dataset
-    await uploadDataSetToCloud(type, namespace_mapping[type].bucket2);
-    await upload_directly_to_cloud(type);
-    await isFilesAvailableInNooBaaBucket(namespace_mapping[type].gateway, files_cloud[`files_${type}`], type);
-    for (const file of files_cloud[`files_${type}`]) {
-        try {
-            await compareMD5betweenCloudAndNooBaa(type, namespace_mapping[type].bucket2, namespace_mapping[type].gateway, false, file);
-            report.success(`read via namespace ${type}`);
-        } catch (err) {
-            console.log('Failed upload via cloud , check via noobaa');
-            throw err;
-        }
-    }
-}*/
-
 // file_name follows the pattern prefix_name_[0-9]+_[KB|MB|GB]
 function _get_size_from_file_name(file_name) {
     const tokens = file_name.split('_');
@@ -323,7 +338,7 @@ async function upload_via_noobaa_endpoint({ type, file_name, bucket }) {
     console.log(`uploading ${file_name} via noobaa bucket ${bucket}`);
     files_cloud[`files_${type}`].push(file_name);
     try {
-        await s3opsNB.put_file_with_md5(bucket, file_name, size, data_multiplier);
+        await s3ops_nb.put_file_with_md5(bucket, file_name, size, data_multiplier);
     } catch (err) {
         throw new Error(`Failed upload file ${file_name} ${err}`);
     }
@@ -377,30 +392,27 @@ async function _run_test_case(test_name, test_case_fn) {
 }
 
 async function run_namespace_cache_tests_non_range_read(type) {
-    const cloudS3Ops = namespace_mapping[type].s3ops;
+    const cloud_s3_ops = namespace_mapping[type].s3ops;
     const noobaa_bucket = namespace_mapping[type].gateway;
     const cloud_bucket = namespace_mapping[type].bucket2;
 
     const delay_ms = cache_ttl_ms + 1000;
     // file size MUST be larger than the size of first range data, i.e. config.INLINE_MAX_SIZE
-    const file_name1 = `file_${type}_8_KB`;
-    const file_name2 = `file_${type}_9_KB`;
-    const file_name_delete_case1 = `file_delete_${type}_7_KB`;
-    const file_name_delete_case2 = `file_delete_${type}_6_KB`;
+    const min_file_size_kb = (config.INLINE_MAX_SIZE / 1024) + 1;
+    const prefix = `file_${(Math.floor(Date.now() / 1000))}_${type}`;
+    const file_name1 = `${prefix}_${min_file_size_kb * 2}_KB`;
+    const file_name2 = `${prefix}_${min_file_size_kb + 1}_KB`;
+    const file_name_delete_case1 = `delete_${prefix}_${min_file_size_kb + 1}_KB`;
+    const file_name_delete_case2 = `delete_${prefix}_${min_file_size_kb + 2}_KB`;
     let cache_last_valid_time;
     let time_start = (new Date()).getTime();
-
-    // Clean up
-    for (const file of [file_name1, file_name2, file_name_delete_case1, file_name_delete_case2]) {
-        await s3opsNB.delete_file(noobaa_bucket, file);
-    }
 
     await _run_test_case(_test_name('object cached during upload to namespace bucket', type), async () => {
         // Upload a file to namespace cache bucket
         // Expect that etags in both hub and noobaa cache bucket match
         // Expect that cache_last_valid_time is set in object MD
         const file_name = file_name1;
-        await upload_via_noobaa_endpoint({ type, file_name, noobaa_bucket });
+        await upload_via_noobaa_endpoint({ type, file_name });
         await check_via_cloud(type, file_name1);
         await validate_md5_between_hub_and_cache({
             type,
@@ -437,7 +449,7 @@ async function run_namespace_cache_tests_non_range_read(type) {
         console.log(`Waiting for TTL to expire in ${delay_ms}ms......`);
         await P.delay(delay_ms);
         time_start = (new Date()).getTime();
-        await s3opsNB.get_file_check_md5(noobaa_bucket, file_name);
+        await s3ops_nb.get_file_check_md5(noobaa_bucket, file_name);
         const md = await valid_cache_object_md({
             noobaa_bucket,
             file_name,
@@ -552,7 +564,7 @@ async function run_namespace_cache_tests_non_range_read(type) {
         // Upload a file to cache bucket and delete it from hub bucket
         // Expect 404 to be returned for read from cache bucket after TTL expires
         const file_name = file_name_delete_case1;
-        await upload_via_noobaa_endpoint({ type, file_name, bucket: noobaa_bucket });
+        await upload_via_noobaa_endpoint({ type, file_name });
         await validate_md5_between_hub_and_cache({
             type,
             cloud_bucket,
@@ -563,13 +575,13 @@ async function run_namespace_cache_tests_non_range_read(type) {
         });
         console.log(`Waiting for TTL to expire in ${delay_ms}ms......`);
         await P.delay(delay_ms);
-        await cloudS3Ops.delete_file(cloud_bucket, file_name);
-        await get_object_expect_not_found(s3opsNB, noobaa_bucket, file_name);
+        await cloud_s3_ops.delete_file(cloud_bucket, file_name);
+        await get_object_expect_not_found(s3ops_nb, noobaa_bucket, file_name);
     });
 
     await _run_test_case(_test_name('delete operation success', type), async () => {
         const file_name = file_name_delete_case2;
-        await upload_via_noobaa_endpoint({ type, file_name, bucket: noobaa_bucket });
+        await upload_via_noobaa_endpoint({ type, file_name });
         await validate_md5_between_hub_and_cache({
             type,
             cloud_bucket,
@@ -578,64 +590,80 @@ async function run_namespace_cache_tests_non_range_read(type) {
             file_name,
             expect_same: true
         });
-        await s3opsNB.delete_file(noobaa_bucket, file_name);
-        await get_object_expect_not_found(s3opsNB, noobaa_bucket, file_name);
-        await get_object_expect_not_found(cloudS3Ops, cloud_bucket, file_name);
+        await s3ops_nb.delete_file(noobaa_bucket, file_name);
+        await get_object_expect_not_found(s3ops_nb, noobaa_bucket, file_name);
+        await get_object_expect_not_found(cloud_s3_ops, cloud_bucket, file_name);
     });
 
     await _run_test_case(_test_name('get operation: object not found', type), async () => {
         const file_name = 'file_not_exist_123';
-        await get_object_expect_not_found(s3opsNB, noobaa_bucket, file_name);
+        await get_object_expect_not_found(s3ops_nb, noobaa_bucket, file_name);
     });
 
     await _run_test_case(_test_name('delete non-exist object', type), async () => {
         const file_name = 'file_not_exist_123';
-        await s3opsNB.delete_file(noobaa_bucket, file_name);
+        await s3ops_nb.delete_file(noobaa_bucket, file_name);
     });
 
 }
 
-/*async function update_read_write_and_check(clouds, name, read_resources, write_resource) {
-    let should_fail;
-    const run_on_clouds = _.clone(clouds);
-    try {
-        await bucket_functions.updateNamesapceBucket(name, write_resource, read_resources);
-        report.success('update namespace bucket w resource');
-    } catch (e) {
-        report.fail('update namespace bucket w resource');
-        throw new Error(e);
-    }
-    await P.delay(30 * 1000);
-    console.error(`${RED}TODO: REMOVE THIS DELAY, IT IS TEMP OVERRIDE FOR BUG #4831${NC}`);
-    const uploaded_file_name = await upload_via_noobaa_endpoint({ type: run_on_clouds[0], bucket: name });
-    //checking that the file was written into the read/write cloud
-    await check_via_cloud(run_on_clouds[0], uploaded_file_name);
-    run_on_clouds.shift();
-    for (let cycle = 0; cycle < run_on_clouds.length; cycle++) {
-        //checking that the file was not written into the read only clouds
-        try {
-            should_fail = await check_via_cloud(run_on_clouds[cycle], uploaded_file_name);
-        } catch (e) {
-            console.log(`${e}, as should`);
-        }
-        if (should_fail) {
-            throw new Error(`Upload succeed To the read only cloud (${run_on_clouds[cycle]}) while it shouldn't`);
-        }
-    }
-}
+async function run_namespace_cache_tests_range_read(type) {
+    const cloud_s3_ops = namespace_mapping[type].s3ops;
+    const noobaa_bucket = namespace_mapping[type].gateway;
+    const cloud_bucket = namespace_mapping[type].bucket2;
 
-async function list_cloud_files_read_via_noobaa(type, noobaa_bucket) {
-    const files_in_cloud_bucket = await list_files_in_cloud(type);
-    for (const file of files_in_cloud_bucket) {
-        try {
-            await compareMD5betweenCloudAndNooBaa(type, namespace_mapping[type].bucket2, noobaa_bucket, file);
-            report.success(`verify md5 via list on ${type}`);
-        } catch (err) {
-            report.fail(`verify md5 via list on ${type}`);
-            throw err;
-        }
-    }
-}*/
+    // file size MUST be larger than the size of first range data, i.e. config.INLINE_MAX_SIZE
+    const block_size = config.NAMESPACE_CACHING.DEFAULT_BLOCK_SIZE;
+    const block_size_kb = block_size / 1024;
+    const small_file_size_kb = block_size_kb / 2;
+    assert(small_file_size_kb > 0);
+
+    // Make file big enough for holding multiple blocks
+    const prefix = `file_${(Math.floor(Date.now() / 1000))}_${type}`;
+    const file_name1 = `${prefix}_${block_size_kb * 7}_KB`;
+    // small file is file with size less than block size
+    // const small_file_name = `small_${prefix}_${small_file_size_kb}_KB`;
+    //let cache_last_valid_time;
+    // const delay_ms = cache_ttl_ms + 1000;
+    //let time_start = (new Date()).getTime();
+
+    await _run_test_case(_test_name('range read: initial read size is < block_size and not across block boundary', type), async () => {
+        const file_name = file_name1;
+        let range_size = 100;
+        let start = (block_size * 3) + 100;
+        let end = start + range_size - 1;
+
+        await upload_directly_to_cloud({ type, file_name });
+        await validate_md5_range_read_between_hub_and_cache({
+            type,
+            cloud_bucket,
+            noobaa_bucket,
+            file_name,
+            start,
+            end,
+            expect_same: true
+        });
+        const cloud_obj_md = get_object_md(cloud_s3_ops, cloud_bucket, file_name);
+        await promise_utils.wait_until(async () => {
+            try {
+                await valid_cache_object_md({
+                    noobaa_bucket,
+                    file_name,
+                    validation_params: {
+                        size: cloud_obj_md.size,
+                        etag: cloud_obj_md.etag,
+                        partial_object: true,
+                        num_parts: 1,
+                    }
+                });
+                return true;
+            } catch (err) {
+                if (err.rpc_code === 'NO_SUCH_OBJECT') return false;
+                throw err;
+            }
+        }, 10000);
+    });
+}
 
 async function create_account_resources(type) {
     let connection_name;
@@ -712,12 +740,12 @@ async function delete_namespace_bucket(bucket, type) {
 }
 
 async function clean_namespace_bucket(bucket, type) {
-    const list_files = await s3opsNB.get_list_files(bucket);
+    const list_files = await s3ops_nb.get_list_files(bucket);
     const keys = list_files.map(key => key.Key);
     if (keys) {
         for (const file of keys) {
             try {
-                await s3opsNB.delete_file(bucket, file);
+                await s3ops_nb.delete_file(bucket, file);
             } catch (e) {
                 report.fail(_test_name('delete object from namespace bucket via noobaa endpoint', type));
             }
@@ -732,6 +760,7 @@ async function main(clouds) {
         for (const type of clouds) {
             await create_account_resources(type);
             await run_namespace_cache_tests_non_range_read(type);
+            await run_namespace_cache_tests_range_read(type);
         }
         if (!skip_clean) {
             for (const type of clouds) {

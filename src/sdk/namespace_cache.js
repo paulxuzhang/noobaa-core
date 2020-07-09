@@ -447,6 +447,8 @@ class NamespaceCache {
             } else {
                 // on error from cache, we ignore and let hub upload continue
                 dbg.log0("NamespaceCache.upload_object: error in cache upload", { params: _.omit(params, 'source_stream'), hub_res, cache_res });
+                // Invalidate cache in case we have old object
+                setImmediate(() => this._delete_object_from_cache(params, object_sdk));
             }
 
             upload_response = hub_res.value;
