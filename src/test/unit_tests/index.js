@@ -29,6 +29,7 @@ require('./test_wait_queue');
 require('./test_kmeans');
 require('./test_sensitive_wrapper');
 // require('./test_debug_module');
+require('./test_range_stream');
 
 // // STORES
 require('./test_md_store');
