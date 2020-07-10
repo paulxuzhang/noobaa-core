@@ -8,7 +8,7 @@ class ObjectAPIFunctions {
     }
 
     async getObjectMD(params) {
-        console.log('Getting object md', params);
+        console.log('Getting object noobaa md', params);
         const { bucket, key } = params;
         try {
             const md = await this._client.object.read_object_md({
@@ -16,10 +16,10 @@ class ObjectAPIFunctions {
                 bucket
             });
 
-            console.log('Got object md', md);
+            console.log('Got object noobaa md', md);
             return md;
         } catch (e) {
-            console.error('Failed to read object md', e);
+            console.error('Failed to read object noobaa md', e);
             throw e;
         }
     }

@@ -191,7 +191,7 @@ const unit_mapping = {
     }
 };
 
-async function get_object_md(s3ops_arg, bucket, file_name, get_from_cache) {
+async function get_object_s3_md(s3ops_arg, bucket, file_name, get_from_cache) {
     try {
         const ret = await s3ops_arg.get_object(bucket, file_name, get_from_cache ? { get_from_cache: true } : undefined);
         return {
@@ -214,16 +214,21 @@ async function get_object_expect_not_found(s3ops_arg, bucket, file_name) {
     }
 }
 
-async function valid_cache_object_md({ noobaa_bucket, file_name, validation_params }) {
+async function valid_cache_object_noobaa_md({ noobaa_bucket, file_name, validation_params }) {
     const md = await object_functions.getObjectMD({ bucket: noobaa_bucket, key: file_name });
-    const { cache_last_valid_time_range, partial_object, num_parts, size, etag } = validation_params;
+    const { cache_last_valid_time_range, partial_object, num_parts, size, etag, upload_size } = validation_params;
     if (cache_last_valid_time_range) {
-        if (!_.inRange(md.cache_last_valid_time, cache_last_valid_time_range.start, cache_last_valid_time_range.end)) {
-            const msg = `expect it between ${cache_last_valid_time_range.start} and ${cache_last_valid_time_range.end}, but got ${md.cache_last_valid_time}`;
+        if (cache_last_valid_time_range.end) {
+            if (!_.inRange(md.cache_last_valid_time, cache_last_valid_time_range.start, cache_last_valid_time_range.end)) {
+                const msg = `expect it between ${cache_last_valid_time_range.start} and ${cache_last_valid_time_range.end}, but got ${md.cache_last_valid_time}`;
+                throw new Error(`Unexpected cache_last_valid_time in object md ${file_name} from bucket ${noobaa_bucket}: ${msg}`);
+            }
+        } else if (md.cache_last_valid_time <= cache_last_valid_time_range.start) {
+            const msg = `expect it after ${cache_last_valid_time_range.start}, but got ${md.cache_last_valid_time}`;
             throw new Error(`Unexpected cache_last_valid_time in object md ${file_name} from bucket ${noobaa_bucket}: ${msg}`);
         }
     }
-    for (const [k, v] of Object.entries({ partial_object, num_parts, size, etag })) {
+    for (const [k, v] of Object.entries({ partial_object, num_parts, size, etag, upload_size })) {
         if (!_.isUndefined(v)) {
             console.log(`Validating ${k}: expect ${v}, has ${md[k]} in md`);
             assert(v === md[k]);
@@ -234,9 +239,9 @@ async function valid_cache_object_md({ noobaa_bucket, file_name, validation_para
 
 async function validate_md5_between_hub_and_cache({ type, cloud_bucket, noobaa_bucket, force_cache_read, file_name, expect_same }) {
     console.log(`Comparing NooBaa cache bucket to ${type} bucket for ${file_name}`);
-    const cloud_md = await get_object_md(namespace_mapping[type].s3ops, cloud_bucket, file_name, false);
+    const cloud_md = await get_object_s3_md(namespace_mapping[type].s3ops, cloud_bucket, file_name, false);
     const cloud_md5 = cloud_md.md5;
-    const noobaa_md = await get_object_md(s3ops_nb, noobaa_bucket, file_name, force_cache_read);
+    const noobaa_md = await get_object_s3_md(s3ops_nb, noobaa_bucket, file_name, force_cache_read);
     const noobaa_md5 = noobaa_md.md5;
     console.log(`Noobaa cache bucket (${noobaa_bucket}) has md5 ${
         noobaa_md5} and the hub bucket ${cloud_bucket} has md5 ${cloud_md5} for file ${file_name}`);
@@ -267,7 +272,9 @@ async function get_range_md5_size(s3ops_arg, bucket, file_name, start, end) {
     }
 }
 
-async function validate_md5_range_read_between_hub_and_cache({ type, cloud_bucket, noobaa_bucket, file_name, start, end, expect_same }) {
+async function validate_md5_range_read_between_hub_and_cache({ type, cloud_bucket, noobaa_bucket, file_name,
+    start, end, expect_read_size, expect_same }) {
+
     console.log(`Comparing NooBaa cache bucket to ${type} bucket for range ${start}-${end} in ${file_name}`);
     const cloud_md = await get_range_md5_size(namespace_mapping[type].s3ops, cloud_bucket, file_name, start, end);
     const cloud_md5 = cloud_md.md5;
@@ -277,9 +284,15 @@ async function validate_md5_range_read_between_hub_and_cache({ type, cloud_bucke
         noobaa_md5} and the hub bucket ${cloud_bucket} has md5 ${cloud_md5} for range ${start}-${end} in file ${file_name}`);
     console.log(`${file_name}: read range size is ${cloud_md.size} on ${type} and ${noobaa_md.size} on noobaa`);
 
-    if (expect_same && cloud_md5 !== noobaa_md5) {
-        throw new Error(`Expect md5 ${noobaa_md5} in NooBaa cache bucket (${noobaa_bucket}) is the same as md5 ${
-            cloud_md5} in hub bucket ${cloud_bucket} for range ${start}-${end} in file ${file_name}`);
+    if (expect_same) {
+        if (cloud_md5 !== noobaa_md5) {
+            throw new Error(`Expect md5 ${noobaa_md5} in NooBaa cache bucket (${noobaa_bucket}) is the same as md5 ${
+                cloud_md5} in hub bucket ${cloud_bucket} for range ${start}-${end} in file ${file_name}`);
+        }
+        if (expect_read_size !== noobaa_md.size) {
+            throw new Error(`Expect range read size ${expect_read_size} on file ${file_name} from NooBaa cache bucket (${noobaa_bucket}) is ${
+                noobaa_md.size} for read range ${start}-${end}`);
+        }
     } else if (!expect_same && cloud_md5 === noobaa_md5) {
         throw new Error(`Expect md5 ${noobaa_md5} in NooBaa cache bucket (${noobaa_bucket}) is different than md5 ${
             cloud_md5} in hub bucket ${cloud_bucket} for range ${start}-${end} in file ${file_name}`);
@@ -354,8 +367,8 @@ async function upload_directly_to_cloud({ type, file_name }) {
     console.log(`uploading ${file_name} directly to ${type} bucket ${hub_bucket}`);
     files_cloud[`files_${type}`].push(file_name);
     try {
-        await namespace_mapping[type].s3ops.put_file_with_md5(hub_bucket, file_name, size, data_multiplier);
-        return file_name;
+        const md5 = await namespace_mapping[type].s3ops.put_file_with_md5(hub_bucket, file_name, size, data_multiplier);
+        return md5;
     } catch (err) {
         throw new Error(`Failed to upload directly into ${type} bucket ${hub_bucket}`);
     }
@@ -376,6 +389,45 @@ async function check_via_cloud(type, file_name) {
         throw new Error(`${file_name} was uploaded via noobaa and was not found via ${type}`);
     }
     return true;
+}
+
+async function validate_range_read({ type, cloud_bucket, noobaa_bucket, file_name,
+    cloud_obj_md, start, end, cache_last_valid_time_range,
+    expect_read_size, expect_num_parts, expect_upload_size }) {
+
+    console.log(`Reading range ${start}-${end} in ${file_name}`);
+    const mds = await validate_md5_range_read_between_hub_and_cache({
+        type,
+        cloud_bucket,
+        noobaa_bucket,
+        file_name,
+        start,
+        end,
+        expect_read_size,
+        expect_same: true
+    });
+    await promise_utils.wait_until(async () => {
+        try {
+            await valid_cache_object_noobaa_md({
+                noobaa_bucket,
+                file_name,
+                validation_params: {
+                    cache_last_valid_time_range,
+                    size: cloud_obj_md.size,
+                    etag: cloud_obj_md.etag,
+                    partial_object: true,
+                    num_parts: expect_num_parts,
+                    upload_size: expect_upload_size,
+                }
+            });
+            return true;
+        } catch (err) {
+            if (err.rpc_code === 'NO_SUCH_OBJECT') return false;
+            throw err;
+        }
+    }, 10000);
+
+    return mds;
 }
 
 async function _run_test_case(test_name, test_case_fn) {
@@ -430,7 +482,7 @@ async function run_namespace_cache_tests_non_range_read(type) {
             file_name,
             expect_same: true
         });
-        await valid_cache_object_md({
+        await valid_cache_object_noobaa_md({
             noobaa_bucket,
             file_name,
             validation_params: {
@@ -450,7 +502,7 @@ async function run_namespace_cache_tests_non_range_read(type) {
         await P.delay(delay_ms);
         time_start = (new Date()).getTime();
         await s3ops_nb.get_file_check_md5(noobaa_bucket, file_name);
-        const md = await valid_cache_object_md({
+        const md = await valid_cache_object_noobaa_md({
             noobaa_bucket,
             file_name,
             validation_params: {
@@ -477,7 +529,7 @@ async function run_namespace_cache_tests_non_range_read(type) {
             file_name,
             expect_same: false
         });
-        await valid_cache_object_md({
+        await valid_cache_object_noobaa_md({
             noobaa_bucket,
             file_name,
             validation_params: {
@@ -513,7 +565,7 @@ async function run_namespace_cache_tests_non_range_read(type) {
             file_name,
             expect_same: true
         });
-        await valid_cache_object_md({
+        await valid_cache_object_noobaa_md({
             noobaa_bucket,
             file_name,
             validation_params: {
@@ -542,7 +594,7 @@ async function run_namespace_cache_tests_non_range_read(type) {
         });
         await promise_utils.wait_until(async () => {
             try {
-                await valid_cache_object_md({
+                await valid_cache_object_noobaa_md({
                     noobaa_bucket,
                     file_name,
                     validation_params: {
@@ -620,20 +672,24 @@ async function run_namespace_cache_tests_range_read(type) {
 
     // Make file big enough for holding multiple blocks
     const prefix = `file_${(Math.floor(Date.now() / 1000))}_${type}`;
-    const file_name1 = `${prefix}_${block_size_kb * 7}_KB`;
+    const file_name1 = `${prefix}_${block_size_kb * 5}_KB`;
     // small file is file with size less than block size
     // const small_file_name = `small_${prefix}_${small_file_size_kb}_KB`;
     //let cache_last_valid_time;
-    // const delay_ms = cache_ttl_ms + 1000;
-    //let time_start = (new Date()).getTime();
-
+    const delay_ms = cache_ttl_ms + 1000;
+    let time_start = (new Date()).getTime();
     await _run_test_case(_test_name('range read: initial read size is < block_size and not across block boundary', type), async () => {
         const file_name = file_name1;
+
+        // Expect block3 will be cached
+        // blocks     :  |       b0        |       b1         |       b2      |  b3(to be cached) |   .....
+        // read range :                                                         <-->
         let range_size = 100;
         let start = (block_size * 3) + 100;
         let end = start + range_size - 1;
 
         await upload_directly_to_cloud({ type, file_name });
+        console.log(`Reading range ${start}-${end} in ${file_name}`);
         await validate_md5_range_read_between_hub_and_cache({
             type,
             cloud_bucket,
@@ -641,19 +697,26 @@ async function run_namespace_cache_tests_range_read(type) {
             file_name,
             start,
             end,
+            expect_read_size: range_size,
             expect_same: true
         });
-        const cloud_obj_md = get_object_md(cloud_s3_ops, cloud_bucket, file_name);
+        const cloud_obj_md = get_object_s3_md(cloud_s3_ops, cloud_bucket, file_name);
+        let time_end = (new Date()).getTime();
         await promise_utils.wait_until(async () => {
             try {
-                await valid_cache_object_md({
+                await valid_cache_object_noobaa_md({
                     noobaa_bucket,
                     file_name,
                     validation_params: {
+                        cache_last_valid_time_range: {
+                            start: time_start,
+                            end: time_end
+                        },
                         size: cloud_obj_md.size,
                         etag: cloud_obj_md.etag,
                         partial_object: true,
                         num_parts: 1,
+                        upload_size: block_size
                     }
                 });
                 return true;
@@ -662,6 +725,117 @@ async function run_namespace_cache_tests_range_read(type) {
                 throw err;
             }
         }, 10000);
+
+        // Expect block1 will be cached, so we will have block1 and block3 cached
+        // blocks     :  |       b0        | b1(to be cached) |       b2      |    b3(cached)     |   .....
+        // read range :                      <-->
+        range_size = 200;
+        start = block_size + 100;
+        end = start + range_size - 1;
+        // Read the same range twice.
+        for (let i = 0; i < 2; i++) {
+            await validate_range_read({
+                type, cloud_bucket, noobaa_bucket, file_name, cloud_obj_md,
+                start, end,
+                expect_read_size: range_size,
+                upload_size: block_size * 2,
+                expect_num_parts: 2,
+                cache_last_valid_time_range: {
+                    start: time_start,
+                    end: time_end
+                }
+            });
+        }
+
+        // Expect block0 and block2 to be cached
+        // blocks     :  | b0(to be cached)|    b1(cached)    | b2(to be cached) |    b3(cached)     |   .....
+        // read range :    <------------------------------------>
+        range_size = block_size * 2;
+        start = 100;
+        end = start + range_size - 1;
+        await validate_range_read({
+            type, cloud_bucket, noobaa_bucket, file_name, cloud_obj_md,
+            start, end,
+            expect_read_size: range_size,
+            expect_num_parts: 4,
+            expect_upload_size: block_size * 4,
+            cache_last_valid_time_range: {
+                start: time_start,
+                end: time_end
+            }
+        });
+
+        // Expect range read to come from cache
+        // blocks     :  |    b0(cached)    |    b1(cached)    |    b2(cached)    |    b3(cached)     |   .....
+        // read range :    <-------------------------------------------------------->
+        range_size = block_size * 3;
+        start = 100;
+        end = start + range_size - 1;
+        await validate_range_read({
+            type, cloud_bucket, noobaa_bucket, file_name, cloud_obj_md,
+            start, end,
+            expect_read_size: range_size,
+            expect_num_parts: 4,
+            expect_upload_size: block_size * 4,
+            cache_last_valid_time_range: {
+                start: time_start,
+                end: time_end
+            }
+        });
+
+        // Expect aligned range read to come from cache
+        // blocks     :  |    b0(cached)    |    b1(cached)    |    b2(cached)    |    b3(cached)     |   .....
+        // read range :                     <------------------>
+        range_size = block_size;
+        start = block_size;
+        end = start + range_size - 1;
+        await validate_range_read({
+            type, cloud_bucket, noobaa_bucket, file_name, cloud_obj_md,
+            start, end,
+            expect_read_size: range_size,
+            expect_num_parts: 4,
+            expect_upload_size: block_size * 4,
+            cache_last_valid_time_range: {
+                start: time_start,
+                end: time_end
+            }
+        });
+
+        // Expect all old cached ranges are deleted after file is changed in hub
+        // blocks     :  |       b0         |  b1(to be cached) | b2(to be cached) |  b3(to be cached) |   .....
+        // read range :                       <-------------------------------------->
+        await upload_directly_to_cloud({ type, file_name });
+        console.log(`Waiting for TTL to expire in ${delay_ms}ms......`);
+        await P.delay(delay_ms);
+        range_size = (block_size * 2) + 100;
+        start = block_size + 100;
+        end = start + range_size - 1;
+        time_start = (new Date()).getTime();
+        const { noobaa_md } = await validate_range_read({
+            type, cloud_bucket, noobaa_bucket, file_name, cloud_obj_md,
+            start, end,
+            expect_read_size: range_size,
+            expect_num_parts: 1,
+            expect_upload_size: block_size * 3,
+            cache_last_valid_time_range: {
+                start: time_start,
+                end: null
+            }
+        });
+
+        // Delete file from hub before TTL expires. Cache shall return the old cached range
+        // blocks     :  |       b0         |     b1(cached)    |    b2(cached)    |     b3(cached)    |   .....
+        // read range :                       <-------------------------------------->
+        console.log(`Double check cached range is returned after ${file_name} is deleted from hub ${cloud_bucket} and before TTL expires`);
+        await cloud_s3_ops.delete_file(cloud_bucket, file_name);
+        await get_object_expect_not_found(cloud_s3_ops, cloud_bucket, file_name);
+        range_size = (block_size * 2) + 100;
+        start = block_size + 100;
+        end = start + range_size - 1;
+        const noobaa_md_again = await get_range_md5_size(s3ops_nb, noobaa_bucket, file_name, start, end);
+        if (!_.isEqual(noobaa_md, noobaa_md_again)) {
+            throw new Error(`Unexpected range read results: expected ${JSON.stringify(noobaa_md)} but got ${JSON.stringify(noobaa_md_again)}`);
+        }
     });
 }
 

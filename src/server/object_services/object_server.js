@@ -81,6 +81,9 @@ async function create_object_upload(req) {
         }
         info.partial_object = true;
         info.etag = req.rpc_params.etag;
+        if (req.bucket.namespace && req.bucket.namespace.caching) {
+            info.cache_last_valid_time = new Date();
+        }
     } else {
         const lock_settings = config.WORM_ENABLED ? calc_retention(req) : undefined;
         if (lock_settings) info.lock_settings = lock_settings;
