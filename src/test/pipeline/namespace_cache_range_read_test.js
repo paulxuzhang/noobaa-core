@@ -5,9 +5,13 @@ const _ = require('lodash');
 const P = require('../../util/promise');
 const promise_utils = require('../../util/promise_utils');
 
-const test_scenarios = [
-    'range read: initial read size is < block_size and not across block boundary',
-];
+const test_scenarios = [];
+const test_funcs = [];
+
+function register_test_scenarios(fn) {
+    test_scenarios.push(fn.desc);
+    test_funcs.push(fn);
+}
 
 async function test_case_range_read_initial_read_size_not_across_blocks({ type, ns_context }) {
 
@@ -172,13 +176,94 @@ async function test_case_range_read_initial_read_size_not_across_blocks({ type, 
         throw new Error(`Unexpected range read results: expected ${JSON.stringify(noobaa_md)} but got ${JSON.stringify(noobaa_md_again)}`);
     }
 }
+test_case_range_read_initial_read_size_not_across_blocks.desc = 'range read: initial read size is < block_size and not across block boundary';
+register_test_scenarios(test_case_range_read_initial_read_size_not_across_blocks);
+
+async function test_case_range_read_from_entire_object_to_partial({ type, ns_context }) {
+
+    // Make file big enough for holding multiple blocks
+    const prefix = `file_${(Math.floor(Date.now() / 1000))}_${type}`;
+    const { block_size, block_size_kb } = ns_context;
+    const file_name = `${prefix}_${block_size_kb * 3}_KB`;
+    const delay_ms = ns_context.cache_ttl_ms + 1000;
+
+    await ns_context.upload_via_noobaa_endpoint({ type, file_name });
+    await ns_context.check_via_cloud(type, file_name);
+    await ns_context.validate_md5_between_hub_and_cache({
+        type,
+        force_cache_read: true,
+        file_name,
+        expect_same: true
+    });
+
+    console.log(`Waiting for TTL to expire in ${delay_ms}ms......`);
+    await P.delay(delay_ms);
+
+    // Upload new content to hub
+    await ns_context.upload_directly_to_cloud({ type, file_name });
+    const time_start = (new Date()).getTime();
+    const cloud_obj_md = ns_context.get_object_s3_md_via_cloud(type, file_name);
+
+    // Expect block1 of new content will be cached
+    // blocks     :  |       b0        | b1(to be cached) |        b2       |       b3        |   .....
+    // read range :                      <-->
+    let range_size = 100;
+    let start = block_size + 100;
+    let end = start + range_size - 1;
+    // Read the same range twice.
+    for (let i = 0; i < 2; i++) {
+        await ns_context.validate_range_read({
+            type, file_name, cloud_obj_md,
+            start, end,
+            expect_read_size: range_size,
+            upload_size: block_size,
+            expect_num_parts: 1,
+            cache_last_valid_time_range: {
+                start: time_start,
+            }
+        });
+    }
+
+    // Expect the read to come from cached block1
+    // blocks     :  |       b0        |     b1(cached)    |        b2       |       b3        |   .....
+    // read range :                      <---->
+    range_size = 200;
+    end = start + range_size - 1;
+    const time_end = (new Date()).getTime();
+    const { noobaa_md } = await ns_context.validate_range_read({
+        type, file_name, cloud_obj_md,
+        start, end,
+        expect_read_size: range_size,
+        expect_num_parts: 1,
+        expect_upload_size: block_size,
+        cache_last_valid_time_range: {
+            start: time_start,
+            end: time_end
+        }
+    });
+
+    // Delete file from hub before TTL expires. Cache shall return the old cached range
+    // blocks     :  |       b0        |     b1(cached)    |        b2       |       b3        |   .....
+    // read range :                      <---->
+    console.log(`Double check cached range is returned after ${file_name} is deleted from hub bucket and before TTL expires`);
+    await ns_context.delete_file_from_cloud(type, file_name);
+    await ns_context.get_object_via_cloud_expect_not_found(type, file_name);
+    const noobaa_md_again = await ns_context.get_range_md5_size_via_noobaa(type, file_name, start, end);
+    if (!_.isEqual(noobaa_md, noobaa_md_again)) {
+        throw new Error(`Unexpected range read results: expected ${JSON.stringify(noobaa_md)} but got ${JSON.stringify(noobaa_md_again)}`);
+    }
+}
+test_case_range_read_from_entire_object_to_partial.desc = 'range read: from entire object to partial object';
+register_test_scenarios(test_case_range_read_from_entire_object_to_partial);
 
 async function run_namespace_cache_tests_range_read({ type, ns_context }) {
-    await ns_context.run_test_case('range read: initial read size is < block_size and not across block boundary', type,
-        async () => {
-            await test_case_range_read_initial_read_size_not_across_blocks({ type, ns_context });
-        }
-    );
+    for (const test_fn of test_funcs) {
+        await ns_context.run_test_case(test_fn.desc, type,
+            async () => {
+                await test_fn({ type, ns_context });
+            }
+        );
+    }
 }
 
 module.exports.test_scenarios = test_scenarios;
