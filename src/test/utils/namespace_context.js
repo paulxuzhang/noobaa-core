@@ -5,9 +5,10 @@ const _ = require('lodash');
 const crypto = require('crypto');
 const promise_utils = require('../../util/promise_utils');
 const { ObjectAPIFunctions } = require('../utils/object_api_functions');
-const { assert } = require('console');
+const assert = require('assert');
 
 //define colors
+const BLUE = "\x1b[34;1m";
 const YELLOW = "\x1b[33;1m";
 const GREEN = "\x1b[32;1m";
 const RED = "\x1b[31;1m";
@@ -85,7 +86,7 @@ class NamespaceContext {
     async get_object_expect_not_found(s3ops_arg, bucket, file_name) {
         try {
             const ret = await s3ops_arg.get_object(bucket, file_name);
-            throw new Error(`Expect file ${file_name} not found in ${bucket}, but found with size: ${ret.ContentLength}`);
+            throw new Error(`Expect ${file_name} not found in ${bucket}, but found with size: ${ret.ContentLength}`);
         } catch (err) {
             if (err.code === 'NoSuchKey') return true;
             throw err;
@@ -139,7 +140,7 @@ class NamespaceContext {
         }
         for (const [k, v] of Object.entries({ partial_object, num_parts, size, etag, upload_size })) {
             if (!_.isUndefined(v)) {
-                console.log(`Validating ${k}: expect ${v}, has ${md[k]} in md`);
+                console.log(`validating ${k}: expect ${v}, has ${md[k]} in md`);
                 assert(v === md[k]);
             }
         }
@@ -147,7 +148,7 @@ class NamespaceContext {
     }
 
     async validate_md5_between_hub_and_cache({ type, force_cache_read, file_name, expect_same }) {
-        console.log(`Comparing NooBaa cache bucket to ${type} bucket for ${file_name}`);
+        console.log(`comparing noobaa cache bucket to ${type} bucket for ${file_name}`);
         const ns = this._ns_mapping[type];
         const cloud_bucket = this._ns_mapping[type].bucket2;
         const noobaa_bucket = this._ns_mapping[type].gateway;
@@ -155,17 +156,16 @@ class NamespaceContext {
         const cloud_md5 = cloud_md.md5;
         const noobaa_md = await this.get_object_s3_md(this._noobaa_s3ops, noobaa_bucket, file_name, force_cache_read);
         const noobaa_md5 = noobaa_md.md5;
-        console.log(`Noobaa cache bucket (${noobaa_bucket}) has md5 ${
-            noobaa_md5} and the hub bucket ${cloud_bucket} has md5 ${cloud_md5} for file ${file_name}`);
-        console.log(`file: ${file_name} size is ${cloud_md.size} on ${
-            type} and ${noobaa_md.size} on noobaa`);
+        console.log(`noobaa cache bucket (${noobaa_bucket}) has md5 ${
+            noobaa_md5} and hub bucket ${cloud_bucket} has md5 ${cloud_md5} for ${file_name}`);
+        console.log(`${file_name} size is ${cloud_md.size} on ${type} and ${noobaa_md.size} on noobaa`);
 
         if (expect_same && cloud_md5 !== noobaa_md5) {
-            throw new Error(`Expect md5 ${noobaa_md5} in NooBaa cache bucket (${noobaa_bucket}) is the same as md5 ${
-                cloud_md5} in hub bucket ${cloud_bucket} for file ${file_name}`);
+            throw new Error(`Expect md5 ${noobaa_md5} in noobaa cache bucket (${noobaa_bucket}) is the same as md5 ${
+                cloud_md5} in hub bucket ${cloud_bucket} for ${file_name}`);
         } else if (!expect_same && cloud_md5 === noobaa_md5) {
-            throw new Error(`Expect md5 ${noobaa_md5} in NooBaa cache bucket (${noobaa_bucket}) is different than md5 ${
-                cloud_md5} in hub bucket ${cloud_bucket} for file ${file_name}`);
+            throw new Error(`Expect md5 ${noobaa_md5} in noobaa cache bucket (${noobaa_bucket}) is different than md5 ${
+                cloud_md5} in hub bucket ${cloud_bucket} for ${file_name}`);
         }
 
         return { cloud_md, noobaa_md };
@@ -173,6 +173,7 @@ class NamespaceContext {
 
     // end is inclusive
     async get_range_md5_size(s3ops_arg, bucket, file_name, start, end) {
+        console.log(`${BLUE}reading range ${start}-${end} from ${file_name} on bucket ${bucket}${NC}`);
         try {
             const ret_body = await s3ops_arg.get_object_range(bucket, file_name, start, end);
             return {
@@ -192,7 +193,7 @@ class NamespaceContext {
     async validate_md5_range_read_between_hub_and_cache({ type, file_name,
         start, end, expect_read_size, expect_same }) {
 
-        console.log(`Comparing NooBaa cache bucket to ${type} bucket for range ${start}-${end} in ${file_name}`);
+        console.log(`comparing noobaa cache bucket to ${type} bucket for range ${start}-${end} in ${file_name}`);
         const ns = this._ns_mapping[type];
         const cloud_bucket = this._ns_mapping[type].bucket2;
         const noobaa_bucket = this._ns_mapping[type].gateway;
@@ -200,44 +201,25 @@ class NamespaceContext {
         const cloud_md5 = cloud_md.md5;
         const noobaa_md = await this.get_range_md5_size(this._noobaa_s3ops, noobaa_bucket, file_name, start, end);
         const noobaa_md5 = noobaa_md.md5;
-        console.log(`Noobaa cache bucket (${noobaa_bucket}) contains the md5 ${
-            noobaa_md5} and the hub bucket ${cloud_bucket} has md5 ${cloud_md5} for range ${start}-${end} in file ${file_name}`);
+        console.log(`noobaa cache bucket (${noobaa_bucket}) contains the md5 ${
+            noobaa_md5} and hub bucket ${cloud_bucket} has md5 ${cloud_md5} for range ${start}-${end} in ${file_name}`);
         console.log(`${file_name}: read range size is ${cloud_md.size} on ${type} and ${noobaa_md.size} on noobaa`);
 
         if (expect_same) {
             if (cloud_md5 !== noobaa_md5) {
-                throw new Error(`Expect md5 ${noobaa_md5} in NooBaa cache bucket (${noobaa_bucket}) is the same as md5 ${
-                    cloud_md5} in hub bucket ${cloud_bucket} for range ${start}-${end} in file ${file_name}`);
+                throw new Error(`Expect md5 ${noobaa_md5} in noobaa cache bucket (${noobaa_bucket}) is the same as md5 ${
+                    cloud_md5} in hub bucket ${cloud_bucket} for range ${start}-${end} in ${file_name}`);
             }
             if (expect_read_size !== noobaa_md.size) {
-                throw new Error(`Expect range read size ${expect_read_size} on file ${file_name} from NooBaa cache bucket (${noobaa_bucket}) is ${
+                throw new Error(`Expect range read size ${expect_read_size} on ${file_name} from noobaa cache bucket (${noobaa_bucket}) but got ${
                     noobaa_md.size} for read range ${start}-${end}`);
             }
         } else if (!expect_same && cloud_md5 === noobaa_md5) {
-            throw new Error(`Expect md5 ${noobaa_md5} in NooBaa cache bucket (${noobaa_bucket}) is different than md5 ${
-                cloud_md5} in hub bucket ${cloud_bucket} for range ${start}-${end} in file ${file_name}`);
+            throw new Error(`Expect md5 ${noobaa_md5} in noobaa cache bucket (${noobaa_bucket}) is different than md5 ${
+                cloud_md5} in hub bucket ${cloud_bucket} for range ${start}-${end} in ${file_name}`);
         }
         return { cloud_md, noobaa_md };
     }
-
-    /*async isFilesAvailableInNooBaaBucket(gateway, files, type) {
-        console.log(`Checking uploaded files ${files} in noobaa s3 server bucket ${gateway}`);
-        const list_files = await noobaa_s3ops.get_list_files(gateway);
-        const keys = list_files.map(key => key.Key);
-        let report_fail = false;
-        for (const file of files) {
-            if (keys.includes(file)) {
-                console.log('Server contains file ' + file);
-            } else {
-                report_fail = true;
-                report.fail(`verify list files ${type}`);
-                throw new Error(`Server is not contains uploaded file ${file} in bucket ${gateway}`);
-            }
-        }
-        if (!report_fail) {
-            report.success(`verify list files ${type}`);
-        }
-    }*/
 
     async upload_via_noobaa_endpoint({ type, file_name, bucket }) {
         const { size, data_multiplier } = this._get_size_from_file_name(file_name);
@@ -256,7 +238,7 @@ class NamespaceContext {
         try {
             await this._noobaa_s3ops.put_file_with_md5(bucket, file_name, size, data_multiplier);
         } catch (err) {
-            throw new Error(`Failed upload file ${file_name} ${err}`);
+            throw new Error(`Failed upload ${file_name} ${err}`);
         }
         return file_name;
     }
@@ -300,9 +282,9 @@ class NamespaceContext {
 
     async validate_range_read({ type, file_name, cloud_obj_md,
         start, end, cache_last_valid_time_range,
-        expect_read_size, expect_num_parts, expect_upload_size }) {
+        expect_read_size, expect_num_parts, expect_upload_size, entire_object }) {
 
-        console.log(`Reading range ${start}-${end} in ${file_name}`);
+        console.log(`validating range read ${start}-${end} in ${file_name}`);
         const mds = await this.validate_md5_range_read_between_hub_and_cache({
             type,
             file_name,
@@ -320,7 +302,7 @@ class NamespaceContext {
                         cache_last_valid_time_range,
                         size: cloud_obj_md.size,
                         etag: cloud_obj_md.etag,
-                        partial_object: true,
+                        partial_object: entire_object ? undefined : true,
                         num_parts: expect_num_parts,
                         upload_size: expect_upload_size,
                     }

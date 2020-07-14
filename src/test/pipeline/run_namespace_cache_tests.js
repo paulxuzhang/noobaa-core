@@ -272,6 +272,7 @@ async function main(clouds) {
         for (const type of clouds) {
             await create_account_resources(type);
             for (const tests of caching_tests) {
+                console.log('=========================================================================');
                 await tests.run({ type, ns_context });
             }
         }
