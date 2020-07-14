@@ -66,6 +66,7 @@ const {
     s3_ip,
     s3_port,
     skip_clean = false,
+    skip_clean_conn = false,
     clean_start = true,
     help = false
 } = argv;
@@ -77,6 +78,7 @@ function usage() {
     --s3_ip             -   noobaa s3 ip
     --s3_port           -   noobaa s3 port
     --skip_clean        -   skipping cleaning env
+    --skip_clean_conn   -   skipping cleaning connection
     --clean_start       -   fail the test if connection, resource or bucket exists
     --help              -   show this help.
     `);
@@ -229,12 +231,14 @@ async function delete_account_resources(clouds) {
         } catch (err) {
             report.fail(mk_test_name('delete namespace resource', type));
         }
-        /*try {
-            await cf.deleteConnection(connections_mapping[type].name);
-            report.success(mk_test_name('delete external connection', type));
-        } catch (err) {
-            report.fail(mk_test_name('delete external connection', type));
-        }*/
+        if (!skip_clean_conn) {
+            try {
+                await cf.deleteConnection(connections_mapping[type].name);
+                report.success(mk_test_name('delete external connection', type));
+            } catch (err) {
+                report.fail(mk_test_name('delete external connection', type));
+            }
+        }
     }
 }
 
