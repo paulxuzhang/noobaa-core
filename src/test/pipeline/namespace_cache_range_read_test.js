@@ -3,8 +3,8 @@
 
 const _ = require('lodash');
 const P = require('../../util/promise');
-const promise_utils = require('../../util/promise_utils');
 const assert = require('assert');
+const config = require('../../../config.js');
 
 const test_scenarios = [];
 const test_funcs = [];
@@ -421,6 +421,71 @@ async function test_case_range_read_from_partial_to_entire_object({ type, ns_con
 }
 test_case_range_read_from_partial_to_entire_object.desc = 'range read: from partial object to entire object';
 register_test_scenarios(test_case_range_read_from_partial_to_entire_object);
+
+async function test_case_range_read_small_file({ type, ns_context }) {
+
+    // Make file big enough for holding multiple blocks
+    const prefix = `file_${(Math.floor(Date.now() / 1000))}_${type}`;
+    const { block_size_kb } = ns_context;
+    const small_file_size = block_size_kb / 2;
+    const file_name = `${prefix}_${small_file_size}_KB`;
+
+    // Expect entire file to be cached
+    // blocks     :  |       b0        |
+    // read range :    <-->
+    let range_size = 100;
+    let start = config.INLINE_MAX_SIZE;
+    let end = start + range_size - 1;
+    let time_start = (new Date()).getTime();
+    await ns_context.upload_directly_to_cloud({ type, file_name });
+    const cloud_obj_md = ns_context.get_object_s3_md_via_cloud(type, file_name);
+
+    await ns_context.validate_range_read({
+        type, file_name, cloud_obj_md,
+        start, end,
+        expect_read_size: range_size,
+        entire_object: true,
+        cache_last_valid_time_range: {
+            start: time_start,
+        }
+    });
+
+    // Read entire file
+    await ns_context.validate_md5_between_hub_and_cache({
+        type,
+        force_cache_read: true,
+        file_name,
+        expect_same: true
+    });
+
+    // Perform another range read
+    start = config.INLINE_MAX_SIZE + 50;
+    range_size = 200;
+    end = start + range_size - 1;
+    // Expect the range to be returned from cached entire object
+    const { noobaa_md } = await ns_context.validate_range_read({
+        type, file_name, cloud_obj_md,
+        start, end,
+        entire_object: true,
+        expect_read_size: range_size,
+        cache_last_valid_time_range: {
+            start: time_start,
+            end: (new Date()).getTime()
+        }
+    });
+
+    // Delete file from hub before TTL expires. Cache shall return the old cached range
+    console.log(`Double check cached range is returned after ${file_name} is deleted from hub bucket and before TTL expires`);
+    await ns_context.delete_file_from_cloud(type, file_name);
+    await ns_context.get_object_via_cloud_expect_not_found(type, file_name);
+    const noobaa_md_again = await ns_context.get_range_md5_size_via_noobaa(type, file_name, start, end);
+    if (!_.isEqual(noobaa_md, noobaa_md_again)) {
+        throw new Error(`Unexpected range read results: expected ${JSON.stringify(noobaa_md)} but got ${JSON.stringify(noobaa_md_again)}`);
+    }
+}
+test_case_range_read_small_file.desc = 'range read: small file is cached entirely';
+register_test_scenarios(test_case_range_read_small_file);
+
 
 async function run_namespace_cache_tests_range_read({ type, ns_context }) {
     for (const test_fn of test_funcs) {

@@ -39,9 +39,8 @@ const DEFAULT_CACHE_TTL_MS = 10000;
 const cache_ttl_ms = _.defaultTo(CACHE_TTL_MS, DEFAULT_CACHE_TTL_MS);
 
 const block_size = config.NAMESPACE_CACHING.DEFAULT_BLOCK_SIZE;
-const block_size_kb = block_size / 1024;
-const small_file_size_kb = block_size_kb / 2;
-assert(small_file_size_kb > 0);
+// Check again since some test requires that block_size is greater than max inline size
+assert(block_size >= (config.INLINE_MAX_SIZE * 3));
 
 const cloud_list = [];
 if (AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) {
