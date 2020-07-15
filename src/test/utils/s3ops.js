@@ -716,6 +716,20 @@ class S3OPS {
         }
     }
 
+    async get_object_size_etag(bucket, file_name) {
+        const params = {
+            Bucket: bucket,
+            Key: file_name,
+        };
+        try {
+            const ret = await this.s3.headObject(params).promise();
+            return { size: ret.ContentLength, etag: _.trim(ret.ETag, '"') };
+        } catch (err) {
+            this.log_error(`get object size and etag for ${file_name} in ${bucket} failed!`, err);
+            throw err;
+        }
+    }
+
     get_file_md5(bucket, file_name) {
         return verify_md5_map.get(`${this.system_verify_name}/${bucket}/${file_name}`);
     }

@@ -15,25 +15,61 @@ function register_test_scenarios(fn) {
     test_funcs.push(fn);
 }
 
-async function test_case_large_file_not_cached_in_normal_read_and_upload({ type, ns_context }) {
+async function test_case_large_file_not_cached({ type, ns_context }) {
 
     const prefix = `file_${(Math.floor(Date.now() / 1000))}_${type}`;
-    const { block_size_kb } = ns_context;
-    const max_cached_file_size_kb = config.NAMESPACE_CACHING.MAX_CACHE_OBJECT_SIZE / 1024;
+    const { block_size, block_size_kb } = ns_context;
+    const max_cached_file_size = config.NAMESPACE_CACHING.MAX_CACHE_OBJECT_SIZE;
+    const max_cached_file_size_kb = max_cached_file_size / 1024;
     // Make file size 2 blocks bigger than the max cached file size
     const file_name = `${prefix}_${max_cached_file_size_kb + (block_size_kb * 2)}_KB`;
 
     // Upload large file and expect it not cached
     await ns_context.upload_via_noobaa_endpoint(type, file_name);
-    await ns_context.get_via_cloud(type, file_name);
+    const cloud_obj_md = await ns_context.get_size_etag_via_cloud(type, file_name);
     await ns_context.expect_not_found_in_cache(type, file_name);
 
     // Read large file and expect it not cached
     await ns_context.get_via_noobaa(type, file_name);
     await ns_context.expect_not_found_in_cache(type, file_name);
+
+    // Read range is larger than max cached object size
+    // No part gets cached
+    let range_size = max_cached_file_size + 200;
+    let start = 100;
+    let end = start + range_size - 1;
+    await ns_context.validate_range_read({
+        type, file_name, cloud_obj_md,
+        start, end,
+        expect_read_size: range_size,
+    });
+
+    // Read small range and expect one block gets cached
+    range_size = 100;
+    start = (block_size * 2) + 100;
+    end = start + range_size - 1;
+    const time_start = (new Date()).getTime();
+    await ns_context.validate_range_read({
+        type, file_name, cloud_obj_md,
+        start, end,
+        expect_read_size: range_size,
+        upload_size: block_size,
+        expect_num_parts: 1,
+        cache_last_valid_time_range: {
+            start: time_start,
+        }
+    });
+
+    // Upload new large file and expect it not cached after normal read and ttl expires
+    await ns_context.upload_via_noobaa_endpoint(type, file_name);
+    await ns_context.get_size_etag_via_cloud(type, file_name);
+
+    await ns_context.delay();
+
+    await ns_context.expect_not_found_in_cache(type, file_name);
 }
-test_case_large_file_not_cached_in_normal_read_and_upload.desc = 'large file not cached in normal read and upload';
-register_test_scenarios(test_case_large_file_not_cached_in_normal_read_and_upload);
+test_case_large_file_not_cached.desc = 'large file not cached in upload, normal and range read';
+register_test_scenarios(test_case_large_file_not_cached);
 
 /*
 async function test_case_range_read_range_variations({ type, ns_context }) {

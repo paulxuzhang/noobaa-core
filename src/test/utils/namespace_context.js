@@ -3,6 +3,7 @@
 
 const _ = require('lodash');
 const crypto = require('crypto');
+const P = require('../../util/promise');
 const promise_utils = require('../../util/promise_utils');
 const { ObjectAPIFunctions } = require('../utils/object_api_functions');
 const assert = require('assert');
@@ -88,9 +89,18 @@ class NamespaceContext {
         return this.get_object_s3_md(this._noobaa_s3ops, noobaa_bucket, file_name);
     }
 
-    async get_object_expect_not_found(s3ops_arg, bucket, file_name) {
+    async get_size_etag(s3ops_arg, bucket, file_name) {
+        return s3ops_arg.get_object_size_etag(bucket, file_name);
+    }
+
+    async get_size_etag_via_cloud(type, file_name) {
+        const cloud_bucket = this._ns_mapping[type].bucket2;
+        return this.get_size_etag(this._ns_mapping[type].s3ops, cloud_bucket, file_name);
+    }
+
+    async get_object_expect_not_found(s3ops_arg, bucket, file_name, get_from_cache) {
         try {
-            const ret = await s3ops_arg.get_object(bucket, file_name);
+            const ret = await s3ops_arg.get_object(bucket, file_name, get_from_cache ? { get_from_cache: true } : undefined);
             throw new Error(`Expect ${file_name} not found in ${bucket}, but found with size: ${ret.ContentLength}`);
         } catch (err) {
             if (err.code === 'NoSuchKey') return true;
@@ -130,13 +140,8 @@ class NamespaceContext {
 
     async expect_not_found_in_cache(type, file_name) {
         const noobaa_bucket = this._ns_mapping[type].gateway;
-        try {
-            await this._obj_functions.getObjectMD({ bucket: noobaa_bucket, key: file_name });
-            throw new Error(`Expect ${file_name} not found in the cache of ${noobaa_bucket} but found`);
-        } catch (err) {
-            if (err.rpc_code === 'NO_SUCH_OBJECT') return true;
-            throw err;
-        }
+        console.log(`expecting cache md not found for ${file_name} in ${noobaa_bucket}`);
+        await this.get_object_expect_not_found(this._noobaa_s3ops, noobaa_bucket, file_name, true);
     }
 
     async validate_cache_noobaa_md({ type, file_name, validation_params }) {
@@ -314,29 +319,40 @@ class NamespaceContext {
             expect_read_size,
             expect_same: true
         });
-        await promise_utils.wait_until(async () => {
-            try {
-                await this.validate_cache_noobaa_md({
-                    type,
-                    file_name,
-                    validation_params: {
-                        cache_last_valid_time_range,
-                        size: cloud_obj_md.size,
-                        etag: cloud_obj_md.etag,
-                        partial_object: entire_object ? undefined : true,
-                        num_parts: expect_num_parts,
-                        upload_size: expect_upload_size,
-                    }
-                });
-                return true;
-            } catch (err) {
-                if (err.rpc_code === 'NO_SUCH_OBJECT') return false;
-                throw err;
-            }
-        }, 10000);
 
+        if (!_.isUndefined(cache_last_valid_time_range) || !_.isUndefined(expect_num_parts) ||
+                 !_.isUndefined(expect_upload_size) || !_.isUndefined(entire_object)) {
+            await promise_utils.wait_until(async () => {
+                try {
+                    await this.validate_cache_noobaa_md({
+                        type,
+                        file_name,
+                        validation_params: {
+                            cache_last_valid_time_range,
+                            size: cloud_obj_md.size,
+                            etag: cloud_obj_md.etag,
+                            partial_object: entire_object ? undefined : true,
+                            num_parts: expect_num_parts,
+                            upload_size: expect_upload_size,
+                        }
+                    });
+                    return true;
+                } catch (err) {
+                    if (err.rpc_code === 'NO_SUCH_OBJECT') return false;
+                    throw err;
+                }
+            }, 10000);
+        } else {
+            await this.expect_not_found_in_cache(type, file_name);
+        }
         console.log(`validation passed: range read ${start}-${end} in ${file_name}`);
         return mds;
+    }
+
+    async delay(delay_ms) {
+        const _delay_ms = _.defaultTo(delay_ms, this.cache_ttl_ms + 1000);
+        console.log(`${BLUE}waiting for ttl to expire in ${_delay_ms} ms......${NC}`);
+        await P.delay(_delay_ms);
     }
 
     async run_test_case(test_desc, cloud_type, test_case_fn) {

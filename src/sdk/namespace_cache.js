@@ -133,8 +133,8 @@ class NamespaceCache {
     async read_object_md(params, object_sdk) {
         let object_info_cache = null;
         let cache_etag = '';
+        const get_from_cache = params.get_from_cache;
         try {
-            const get_from_cache = params.get_from_cache;
             // Remove get_from_cache if exists for maching RPC schema
             params = _.omit(params, 'get_from_cache');
             object_info_cache = await this.namespace_nb.read_object_md(params, object_sdk);
@@ -156,6 +156,7 @@ class NamespaceCache {
             cache_etag = object_info_cache.etag;
         } catch (err) {
             dbg.log0('NamespaceCache.read_object_md: error in cache', err);
+            if (get_from_cache) throw err;
         }
 
         try {

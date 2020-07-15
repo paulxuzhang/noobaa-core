@@ -18,7 +18,6 @@ const test_scenarios = [
 ];
 
 async function run_namespace_cache_tests_non_range_read({ type, ns_context }) {
-    const delay_ms = ns_context.cache_ttl_ms + 1000;
     // file size MUST be larger than the size of first range data, i.e. config.INLINE_MAX_SIZE
     const min_file_size_kb = (config.INLINE_MAX_SIZE / 1024) + 1;
     const prefix = `file_${(Math.floor(Date.now() / 1000))}_${type}`;
@@ -63,9 +62,10 @@ async function run_namespace_cache_tests_non_range_read({ type, ns_context }) {
     await ns_context.run_test_case('cache_last_valid_time gets updated after ttl expires', type, async () => {
         // Wait for cache TTL to expire and read the file again
         // Expect cache_last_valid_time to be updated in object MD
+
+        await ns_context.delay();
+
         const file_name = file_name1;
-        console.log(`waiting for ttl to expire in ${delay_ms}ms......`);
-        await P.delay(delay_ms);
         time_start = (new Date()).getTime();
         await ns_context.get_via_noobaa_check_md5(type, file_name);
         const md = await ns_context.validate_cache_noobaa_md({
@@ -109,9 +109,10 @@ async function run_namespace_cache_tests_non_range_read({ type, ns_context }) {
         // Wait for cache TTL to expire
         // Expect that etags in both hub and noobaa cache bucket match
         // Expect that cache_last_valid_time is updated in object MD
+
+        await ns_context.delay();
+
         const file_name = file_name1;
-        console.log(`waiting for ttl to expire in ${delay_ms}ms......`);
-        await P.delay(delay_ms);
         time_start = (new Date()).getTime();
         await ns_context.validate_md5_between_hub_and_cache({
             type,
@@ -181,8 +182,9 @@ async function run_namespace_cache_tests_non_range_read({ type, ns_context }) {
             file_name,
             expect_same: true
         });
-        console.log(`waiting for ttl to expire in ${delay_ms}ms......`);
-        await P.delay(delay_ms);
+
+        await ns_context.delay();
+
         await ns_context.delete_from_cloud(type, file_name);
         await ns_context.get_via_noobaa_expect_not_found(type, file_name);
     });

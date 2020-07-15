@@ -21,7 +21,6 @@ async function test_case_range_read_initial_read_size_not_across_blocks({ type, 
     const prefix = `file_${(Math.floor(Date.now() / 1000))}_${type}`;
     const { block_size, block_size_kb } = ns_context;
     const file_name = `${prefix}_${block_size_kb * 5}_KB`;
-    const delay_ms = ns_context.cache_ttl_ms + 1000;
     let time_start = (new Date()).getTime();
 
     // Expect block3 will be cached
@@ -125,8 +124,9 @@ async function test_case_range_read_initial_read_size_not_across_blocks({ type, 
     // read range :                       <-------------------------------------->
     await ns_context.upload_directly_to_cloud(type, file_name);
     cloud_obj_md = await ns_context.get_via_cloud(type, file_name);
-    console.log(`waiting for ttl to expire in ${delay_ms}ms......`);
-    await P.delay(delay_ms);
+
+    await ns_context.delay();
+
     range_size = (block_size * 2) + 100;
     start = block_size + 100;
     end = start + range_size - 1;
@@ -281,7 +281,6 @@ async function test_case_range_read_from_entire_object_to_partial({ type, ns_con
     const prefix = `file_${(Math.floor(Date.now() / 1000))}_${type}`;
     const { block_size, block_size_kb } = ns_context;
     const file_name = `${prefix}_${block_size_kb * 3}_KB`;
-    const delay_ms = ns_context.cache_ttl_ms + 1000;
 
     await ns_context.upload_via_noobaa_endpoint(type, file_name);
     await ns_context.check_via_cloud(type, file_name);
@@ -292,8 +291,7 @@ async function test_case_range_read_from_entire_object_to_partial({ type, ns_con
         expect_same: true
     });
 
-    console.log(`waiting for ttl to expire in ${delay_ms}ms......`);
-    await P.delay(delay_ms);
+    await ns_context.delay();
 
     // Upload new content to hub
     await ns_context.upload_directly_to_cloud(type, file_name);
