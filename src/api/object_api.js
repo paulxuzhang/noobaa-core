@@ -47,7 +47,13 @@ module.exports = {
                     },
                     lock_settings: {
                         $ref: 'common_api#/definitions/lock_settings'
-                    }
+                    },
+                    etag: {
+                        type: 'string'
+                    },
+                    partial_object: {
+                        type: 'boolean'
+                    },
                 }
             },
             reply: {
@@ -60,6 +66,39 @@ module.exports = {
                     chunk_split_config: { $ref: 'common_api#/definitions/chunk_split_config' },
                     chunk_coder_config: { $ref: 'common_api#/definitions/chunk_coder_config' },
                     encryption: { $ref: 'common_api#/definitions/object_encryption' },
+                }
+            },
+            auth: { system: ['admin', 'user'] }
+        },
+
+        start_object_part_upload: {
+            method: 'POST',
+            params: {
+                type: 'object',
+                required: [
+                    'bucket',
+                    'key',
+                    'obj_id',
+                ],
+                properties: {
+                    bucket: { $ref: 'common_api#/definitions/bucket_name' },
+                    key: { type: 'string' },
+                    obj_id: { objectid: true },
+                    start: { type: 'integer' },
+                    end: { type: 'integer' },
+                }
+            },
+            reply: {
+                type: 'object',
+                required: ['obj_id', 'chunk_split_config', 'chunk_coder_config', 'tier_id'],
+                properties: {
+                    obj_id: { objectid: true },
+                    bucket_id: { objectid: true },
+                    tier_id: { objectid: true },
+                    chunk_split_config: { $ref: 'common_api#/definitions/chunk_split_config' },
+                    chunk_coder_config: { $ref: 'common_api#/definitions/chunk_coder_config' },
+                    encryption: { $ref: 'common_api#/definitions/object_encryption' },
+                    upload_size: { type: 'integer' }
                 }
             },
             auth: { system: ['admin', 'user'] }
@@ -124,6 +163,53 @@ module.exports = {
                     encryption: { $ref: 'common_api#/definitions/object_encryption' },
                     content_type: { type: 'string' },
                     size: { type: 'integer' },
+                }
+            },
+            auth: { system: ['admin', 'user'] }
+        },
+
+        complete_object_part_upload: {
+            method: 'PUT',
+            params: {
+                type: 'object',
+                required: [
+                    'obj_id',
+                    'bucket',
+                    'key',
+                ],
+                properties: {
+                    obj_id: {
+                        objectid: true,
+                    },
+                    bucket: { $ref: 'common_api#/definitions/bucket_name' },
+                    key: { type: 'string' },
+                    size: {
+                        type: 'integer',
+                    },
+                    num_parts: {
+                        type: 'integer',
+                    },
+                    etag: {
+                        type: 'string',
+                    },
+                    md5_b64: {
+                        type: 'string'
+                    },
+                    sha256_b64: {
+                        type: 'string'
+                    },
+                }
+            },
+            reply: {
+                type: 'object',
+                required: ['etag', 'num_parts', 'upload_size'],
+                properties: {
+                    etag: { type: 'string' },
+                    encryption: { $ref: 'common_api#/definitions/object_encryption' },
+                    content_type: { type: 'string' },
+                    size: { type: 'integer' },
+                    num_parts: { type: 'integer' },
+                    upload_size: { type: 'integer' },
                 }
             },
             auth: { system: ['admin', 'user'] }
@@ -1347,7 +1433,8 @@ module.exports = {
                 // It does not pay attention to dedup
                 capacity_size: { type: 'integer' },
                 s3_signed_url: { type: 'string' },
-                lock_settings: { $ref: 'common_api#/definitions/lock_settings' }
+                lock_settings: { $ref: 'common_api#/definitions/lock_settings' },
+                partial_object: { type: 'boolean' },
             }
         },
 
