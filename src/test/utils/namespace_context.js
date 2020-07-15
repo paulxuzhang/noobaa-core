@@ -60,7 +60,7 @@ class NamespaceContext {
         }
     }
 
-    async get_file_via_noobaa_check_md5(type, file_name) {
+    async get_via_noobaa_check_md5(type, file_name) {
         const noobaa_bucket = this._ns_mapping[type].gateway;
         await this._noobaa_s3ops.get_file_check_md5(noobaa_bucket, file_name);
     }
@@ -71,16 +71,21 @@ class NamespaceContext {
             return {
                 md5: crypto.createHash('md5').update(ret.Body).digest('base64'),
                 size: ret.Body.length,
-                etag: ret.ETag,
+                etag: _.trim(ret.ETag, '"')
             };
         } catch (err) {
             throw new Error(`Failed to get data from ${file_name} in ${bucket}: ${err}`);
         }
     }
 
-    async get_object_s3_md_via_cloud(type, file_name) {
+    async get_via_cloud(type, file_name) {
         const cloud_bucket = this._ns_mapping[type].bucket2;
-        await this.get_object_s3_md(this._ns_mapping[type].s3ops, cloud_bucket, file_name);
+        return this.get_object_s3_md(this._ns_mapping[type].s3ops, cloud_bucket, file_name);
+    }
+
+    async get_via_noobaa(type, file_name) {
+        const noobaa_bucket = this._ns_mapping[type].gateway;
+        return this.get_object_s3_md(this._noobaa_s3ops, noobaa_bucket, file_name);
     }
 
     async get_object_expect_not_found(s3ops_arg, bucket, file_name) {
@@ -93,17 +98,17 @@ class NamespaceContext {
         }
     }
 
-    async get_object_via_noobaa_expect_not_found(type, file_name) {
+    async get_via_noobaa_expect_not_found(type, file_name) {
         const noobaa_bucket = this._ns_mapping[type].gateway;
         await this.get_object_expect_not_found(this._noobaa_s3ops, noobaa_bucket, file_name);
     }
 
-    async get_object_via_cloud_expect_not_found(type, file_name) {
+    async get_via_cloud_expect_not_found(type, file_name) {
         const cloud_bucket = this._ns_mapping[type].bucket2;
         await this.get_object_expect_not_found(this._ns_mapping[type].s3ops, cloud_bucket, file_name);
     }
 
-    async delete_file_from_noobaa(type, file_name) {
+    async delete_from_noobaa(type, file_name) {
         try {
             const noobaa_bucket = this._ns_mapping[type].gateway;
             await this._noobaa_s3ops.delete_file(noobaa_bucket, file_name);
@@ -113,7 +118,7 @@ class NamespaceContext {
         }
     }
 
-    async delete_file_from_cloud(type, file_name) {
+    async delete_from_cloud(type, file_name) {
         try {
             const cloud_bucket = this._ns_mapping[type].bucket2;
             await this._ns_mapping[type].s3ops.delete_file(cloud_bucket, file_name);
@@ -123,8 +128,20 @@ class NamespaceContext {
         }
     }
 
-    async valid_cache_object_noobaa_md({ type, file_name, validation_params }) {
+    async expect_not_found_in_cache(type, file_name) {
         const noobaa_bucket = this._ns_mapping[type].gateway;
+        try {
+            await this._obj_functions.getObjectMD({ bucket: noobaa_bucket, key: file_name });
+            throw new Error(`Expect ${file_name} not found in the cache of ${noobaa_bucket} but found`);
+        } catch (err) {
+            if (err.rpc_code === 'NO_SUCH_OBJECT') return true;
+            throw err;
+        }
+    }
+
+    async validate_cache_noobaa_md({ type, file_name, validation_params }) {
+        const noobaa_bucket = this._ns_mapping[type].gateway;
+        console.log(`validating noobaa cache md for ${file_name} in ${noobaa_bucket}`);
         const md = await this._obj_functions.getObjectMD({ bucket: noobaa_bucket, key: file_name });
         const { cache_last_valid_time_range, partial_object, num_parts, size, etag, upload_size } = validation_params;
         if (cache_last_valid_time_range) {
@@ -140,15 +157,16 @@ class NamespaceContext {
         }
         for (const [k, v] of Object.entries({ partial_object, num_parts, size, etag, upload_size })) {
             if (!_.isUndefined(v)) {
-                console.log(`validating ${k}: expect ${v}, has ${md[k]} in md`);
+                console.log(`validating ${k}: expect ${v} and have ${md[k]} in noobaa md`);
                 assert(v === md[k]);
             }
         }
+        console.log(`validation passed: noobaa cache md for ${file_name} in ${noobaa_bucket}`);
         return md;
     }
 
     async validate_md5_between_hub_and_cache({ type, force_cache_read, file_name, expect_same }) {
-        console.log(`comparing noobaa cache bucket to ${type} bucket for ${file_name}`);
+        console.log(`comparing md5 between noobaa cache bucket and ${type} bucket for ${file_name}`);
         const ns = this._ns_mapping[type];
         const cloud_bucket = this._ns_mapping[type].bucket2;
         const noobaa_bucket = this._ns_mapping[type].gateway;
@@ -168,6 +186,7 @@ class NamespaceContext {
                 cloud_md5} in hub bucket ${cloud_bucket} for ${file_name}`);
         }
 
+        console.log(`validation passed: noobaa cache bucket ${noobaa_bucket} and ${type} bucket have same md5 for ${file_name}`);
         return { cloud_md, noobaa_md };
     }
 
@@ -218,10 +237,12 @@ class NamespaceContext {
             throw new Error(`Expect md5 ${noobaa_md5} in noobaa cache bucket (${noobaa_bucket}) is different than md5 ${
                 cloud_md5} in hub bucket ${cloud_bucket} for range ${start}-${end} in ${file_name}`);
         }
+
+        console.log(`validation passed: noobaa cache bucket ${noobaa_bucket} and ${type} bucket ${cloud_bucket} have same md5 for range ${start}-${end} in ${file_name}`);
         return { cloud_md, noobaa_md };
     }
 
-    async upload_via_noobaa_endpoint({ type, file_name, bucket }) {
+    async upload_via_noobaa_endpoint(type, file_name, bucket) {
         const { size, data_multiplier } = this._get_size_from_file_name(file_name);
         if (!file_name) {
             file_name = 'file_namespace_test_' + (Math.floor(Date.now() / 1000));
@@ -243,7 +264,7 @@ class NamespaceContext {
         return file_name;
     }
 
-    async upload_directly_to_cloud({ type, file_name }) {
+    async upload_directly_to_cloud(type, file_name) {
         const { size, data_multiplier } = this._get_size_from_file_name(file_name);
         if (!file_name) {
             file_name = 'file_namespace_test_' + (Math.floor(Date.now() / 1000));
@@ -295,7 +316,7 @@ class NamespaceContext {
         });
         await promise_utils.wait_until(async () => {
             try {
-                await this.valid_cache_object_noobaa_md({
+                await this.validate_cache_noobaa_md({
                     type,
                     file_name,
                     validation_params: {
@@ -314,6 +335,7 @@ class NamespaceContext {
             }
         }, 10000);
 
+        console.log(`validation passed: range read ${start}-${end} in ${file_name}`);
         return mds;
     }
 

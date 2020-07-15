@@ -15,10 +15,12 @@ const { assert } = require('console');
 
 const ns_cache_test_normal = require('./namespace_cache_normal_test');
 const ns_cache_test_range_read = require('./namespace_cache_range_read_test');
+const ns_cache_test_large_file = require('./namespace_cache_large_file_test');
 
 const caching_tests = [
     ns_cache_test_normal,
-    ns_cache_test_range_read
+    ns_cache_test_range_read,
+    ns_cache_test_large_file,
 ];
 
 const test_suite_name = 'namespace_cache';
