@@ -76,6 +76,8 @@ module.exports = {
         upload_size: { type: 'integer' },
         upload_started: { objectid: true },
         create_time: { date: true },
+        // indication on whether we have all data for object
+        partial_object: { type: 'boolean' },
         cache_last_valid_time: { date: true },
 
         // etag is the object md5 hex for objects uploaded in single action.
