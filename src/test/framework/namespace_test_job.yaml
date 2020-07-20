@@ -30,9 +30,9 @@ spec:
           - name: SUPPRESS_LOGS
             value: "FALSE"
           - name: COS_ACCESS_KEY_ID
-            value: 3577ebdc7e5e4c25ae310e32158198c2
+            value: "COS_ACCESS_KEY_ID_PLACEHOLDER"
           - name: COS_SECRET_ACCESS_KEY
-            value: d62d4f161276db32b52bf1459b4b22b10feeec3b583336b1
+            value: "COS_SECRET_ACCESS_KEY_PLACEHOLDER"
       restartPolicy: Never
   backoffLimit: 0
 
