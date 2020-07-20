@@ -99,8 +99,8 @@ const bucket_functions = new BucketFunctions(rpc_client);
 const aws_connection = cf.getAWSConnection();
 const cos_connection = cf.getCOSConnection();
 
-const s3ops_nb = new S3OPS({ ip: s3_ip, port: s3_port, use_https: false, sig_ver: 'v2',
-        access_key: 'kD7qH0XqBJPoWTLxkRF5', secret_key: '+Zn085rPHJiASbGAwvIoEg0Iok3t3NW6gbHGszLN'});
+const s3ops_nb = new S3OPS({ ip: s3_ip, port: s3_port });
+
 const s3ops_aws = new S3OPS({
     ip: 's3.amazonaws.com',
     access_key: aws_connection.identity,

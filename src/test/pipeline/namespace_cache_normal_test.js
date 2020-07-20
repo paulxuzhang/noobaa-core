@@ -28,6 +28,7 @@ async function run_namespace_cache_tests_non_range_read({ type, ns_context }) {
     let cache_last_valid_time;
     let time_start = (new Date()).getTime();
 
+    // !!!!!!!! NOTE: The order of the tests matters. Don't change the order.  !!!!!!!!!!!!
     await ns_context.run_test_case('object cached during upload to namespace bucket', type, async () => {
         // Upload a file to namespace cache bucket
         // Expect that etags in both hub and noobaa cache bucket match
@@ -120,21 +121,29 @@ async function run_namespace_cache_tests_non_range_read({ type, ns_context }) {
             file_name,
             expect_same: true
         });
+        await promise_utils.wait_until(async () => {
+            try {
+                await ns_context.validate_cache_noobaa_md({
+                    type,
+                    file_name,
+                    validation_params: {
+                        cache_last_valid_time_range: {
+                            start: time_start,
+                            end: (new Date()).getTime()
+                        }
+                    }
+                });
+                return true;
+            } catch (err) {
+                if (err.rpc_code === 'NO_SUCH_OBJECT') return false;
+                throw err;
+            }
+        }, 10000);
         await ns_context.validate_md5_between_hub_and_cache({
             type,
             force_cache_read: true,
             file_name,
             expect_same: true
-        });
-        await ns_context.validate_cache_noobaa_md({
-            type,
-            file_name,
-            validation_params: {
-                cache_last_valid_time_range: {
-                    start: time_start,
-                    end: (new Date()).getTime()
-                }
-            }
         });
     });
 
