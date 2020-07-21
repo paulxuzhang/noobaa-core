@@ -1,7 +1,6 @@
 /* Copyright (C) 2016 NooBaa */
 'use strict';
 
-const P = require('../../util/promise');
 const promise_utils = require('../../util/promise_utils');
 const config = require('../../../config');
 

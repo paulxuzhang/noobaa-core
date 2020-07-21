@@ -1,8 +1,6 @@
 /* Copyright (C) 2016 NooBaa */
 'use strict';
 
-const _ = require('lodash');
-const P = require('../../util/promise');
 const assert = require('assert');
 const config = require('../../../config.js');
 
