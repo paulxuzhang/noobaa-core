@@ -245,12 +245,12 @@ class NamespaceCache {
                     });
                     read_stream.on('error', err => {
                         dbg.error('NamespaceCache.missing_part_getter: stream error', err);
-                        throw err;
+                        reject(err);
                     });
                 })
                 .catch(err => {
                     dbg.error('NamespaceCache.missing_part_getter: _read_hub_object_stream error', err);
-                    throw err;
+                    reject(err);
                 });
             });
         };
@@ -283,9 +283,19 @@ class NamespaceCache {
             hub_read_params.end = hub_read_range.end;
 
             hub_read_size = hub_read_range.end - hub_read_range.start;
+
+            hub_read_params.if_match_etag = params.object_md.should_read_from_cache ? params.object_md.etag : undefined;
         }
 
-        const hub_read_stream = await this.namespace_hub.read_object_stream(hub_read_params, object_sdk);
+        let hub_read_stream;
+        try {
+            hub_read_stream = await this.namespace_hub.read_object_stream(hub_read_params, object_sdk);
+        } catch (err) {
+            if (err.rpc_code === 'IF_MATCH_ETAG') {
+                await this._delete_object_from_cache(params, object_sdk);
+            }
+            throw err;
+        }
 
         let range_stream;
         if (params.start || params.end) {

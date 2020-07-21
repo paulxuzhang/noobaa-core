@@ -153,17 +153,25 @@ class NamespaceContext {
             if (cache_last_valid_time_range.end) {
                 if (!_.inRange(md.cache_last_valid_time, cache_last_valid_time_range.start, cache_last_valid_time_range.end)) {
                     const msg = `expect it between ${cache_last_valid_time_range.start} and ${cache_last_valid_time_range.end}, but got ${md.cache_last_valid_time}`;
-                    throw new Error(`Unexpected cache_last_valid_time in object md ${file_name} from bucket ${noobaa_bucket}: ${msg}`);
+                    const err = new Error(`Unexpected cache_last_valid_time in object md ${file_name} in bucket ${noobaa_bucket}: ${msg}`);
+                    err.name = 'UnexpectedValue';
+                    throw err;
                 }
             } else if (md.cache_last_valid_time <= cache_last_valid_time_range.start) {
                 const msg = `expect it after ${cache_last_valid_time_range.start}, but got ${md.cache_last_valid_time}`;
-                throw new Error(`Unexpected cache_last_valid_time in object md ${file_name} from bucket ${noobaa_bucket}: ${msg}`);
-            }
+                const err = new Error(`Unexpected cache_last_valid_time in object md ${file_name} in bucket ${noobaa_bucket}: ${msg}`);
+                err.name = 'UnexpectedValue';
+                throw err;
+        }
         }
         for (const [k, v] of Object.entries({ partial_object, num_parts, size, etag, upload_size })) {
             if (!_.isUndefined(v)) {
                 console.log(`validating ${k}: expect ${v} and have ${md[k]} in noobaa md`);
-                assert(v === md[k]);
+                if (v !== md[k]) {
+                    const err = new Error(`Unexpected ${k} expect ${v} and have ${md[k]} in object md ${file_name} in bucket ${noobaa_bucket}`);
+                    err.name = 'UnexpectedValue';
+                    throw err;
+                }
             }
         }
         console.log(`validation passed: noobaa cache md for ${file_name} in ${noobaa_bucket}`);
@@ -339,6 +347,7 @@ class NamespaceContext {
                     return true;
                 } catch (err) {
                     if (err.rpc_code === 'NO_SUCH_OBJECT') return false;
+                    if (err.name === 'UnexpectedValue') return false;
                     throw err;
                 }
             }, 10000);

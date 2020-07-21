@@ -483,6 +483,67 @@ async function test_case_range_read_small_file({ type, ns_context }) {
 test_case_range_read_small_file.desc = 'range read: small file is cached entirely';
 register_test_scenarios(test_case_range_read_small_file);
 
+async function test_case_range_read_if_match_etag_failure({ type, ns_context }) {
+
+    // Make file big enough for holding multiple blocks
+    const prefix = `file_${(Math.floor(Date.now() / 1000))}_${type}`;
+    const { block_size, block_size_kb } = ns_context;
+    const file_name = `${prefix}_${block_size_kb * 3}_KB`;
+
+    // Expect block1 to be cached
+    // blocks     :  |       b0        |  b1(to be cached)  |       b2        |
+    // read range :                      <-->
+    let range_size = 100;
+    let start = block_size + 100;
+    let end = start + range_size - 1;
+    let time_start = (new Date()).getTime();
+    await ns_context.upload_directly_to_cloud(type, file_name);
+    let cloud_obj_md = await ns_context.get_via_cloud(type, file_name);
+
+    await ns_context.validate_range_read({
+        type, file_name, cloud_obj_md,
+        start, end,
+        expect_read_size: range_size,
+        upload_size: block_size,
+        expect_num_parts: 1,
+        cache_last_valid_time_range: {
+            start: time_start,
+        }
+    });
+
+    // Upload object with new content to hub
+    await ns_context.upload_directly_to_cloud(type, file_name);
+    cloud_obj_md = await ns_context.get_via_cloud(type, file_name);
+
+    // Expect block1 to be cached
+    // blocks     :  |       b0        |       b1       |  b2(to be cached) |
+    // read range :                                        <-->
+    start = (block_size * 2) + 100;
+    end = start + range_size - 1;
+    time_start = (new Date()).getTime();
+    const { noobaa_md } = await ns_context.validate_range_read({
+        type, file_name, cloud_obj_md,
+        start, end,
+        expect_read_size: range_size,
+        upload_size: block_size,
+        expect_num_parts: 1,
+        cache_last_valid_time_range: {
+            start: time_start,
+        }
+    });
+
+    // Delete file from hub before TTL expires. Cache shall return the old cached range
+    console.log(`double check cached range is returned after ${file_name} is deleted from hub bucket and before TTL expires`);
+    await ns_context.delete_from_cloud(type, file_name);
+    await ns_context.get_via_cloud_expect_not_found(type, file_name);
+    const noobaa_md_again = await ns_context.get_range_md5_size_via_noobaa(type, file_name, start, end);
+    if (!_.isEqual(noobaa_md, noobaa_md_again)) {
+        throw new Error(`Unexpected range read results: expected ${JSON.stringify(noobaa_md)} but got ${JSON.stringify(noobaa_md_again)}`);
+    }
+}
+test_case_range_read_if_match_etag_failure.desc = 'range read: if-match etag failure during range read on hub';
+register_test_scenarios(test_case_range_read_if_match_etag_failure);
+
 
 async function run_namespace_cache_tests_range_read({ type, ns_context }) {
     for (const test_fn of test_funcs) {
