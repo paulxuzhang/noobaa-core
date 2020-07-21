@@ -35,6 +35,8 @@ const {
     COS_SECRET_ACCESS_KEY,
     CACHE_TTL_MS,
     SYSTEM_NAME,
+    NB_ACCESS_KEY_ID,
+    NB_SECRET_ACCESS_KEY,
 } = process.env;
 
 const DEFAULT_CACHE_TTL_MS = 10000;
@@ -99,7 +101,8 @@ const bucket_functions = new BucketFunctions(rpc_client);
 const aws_connection = cf.getAWSConnection();
 const cos_connection = cf.getCOSConnection();
 
-const s3ops_nb = new S3OPS({ ip: s3_ip, port: s3_port });
+const s3ops_nb = new S3OPS(NB_ACCESS_KEY_ID ? { ip: s3_ip, port: s3_port, use_https: false, sig_ver: 'v2',
+    access_key: NB_ACCESS_KEY_ID, secret_key: NB_SECRET_ACCESS_KEY } : { ip: s3_ip, port: s3_port });
 
 const s3ops_aws = new S3OPS({
     ip: 's3.amazonaws.com',
