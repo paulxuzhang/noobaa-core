@@ -69,7 +69,7 @@ class NamespaceContext {
         try {
             const ret = await s3ops_arg.get_object(bucket, file_name, get_from_cache ? { get_from_cache: true } : undefined);
             return {
-                md5: crypto.createHash('md5').update(ret.Body).digest('base64'),
+                md5: crypto.createHash('md5').update(ret.Body).digest('hex'),
                 size: ret.Body.length,
                 etag: _.trim(ret.ETag, '"')
             };
@@ -135,6 +135,12 @@ class NamespaceContext {
             if (err.code === 'NoSuchKey') return true;
             throw err;
         }
+    }
+
+    async delete_files_from_noobaa(type, file_names) {
+        const noobaa_bucket = this._ns_mapping[type].gateway;
+        await this._noobaa_s3ops.delete_multiple_files(noobaa_bucket,
+            _.map(file_names, filename => ({ filename })));
     }
 
     async expect_not_found_in_cache(type, file_name) {
@@ -271,11 +277,12 @@ class NamespaceContext {
             this._files_cloud[`files_${type}`] = [ file_name ];
         }
         try {
-            await this._noobaa_s3ops.put_file_with_md5(bucket, file_name, size, data_multiplier);
+            const md5 = await this._noobaa_s3ops.put_file_with_md5(bucket, file_name, size, data_multiplier);
+            return { file_name, md5 };
+
         } catch (err) {
             throw new Error(`Failed upload ${file_name} ${err}`);
         }
-        return file_name;
     }
 
     async upload_directly_to_cloud(type, file_name) {
@@ -292,7 +299,7 @@ class NamespaceContext {
         }
         try {
             const md5 = await this._ns_mapping[type].s3ops.put_file_with_md5(hub_bucket, file_name, size, data_multiplier);
-            return md5;
+            return { file_name, md5 };
         } catch (err) {
             throw new Error(`Failed to upload directly into ${type} bucket ${hub_bucket}`);
         }

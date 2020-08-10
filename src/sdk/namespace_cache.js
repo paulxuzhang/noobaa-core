@@ -583,7 +583,16 @@ class NamespaceCache {
     }
 
     async delete_multiple_objects(params, object_sdk) {
-        const deleted_res = await this.namespace_hub.delete_multiple_objects(params, object_sdk);
+        const [hub_res, cache_res] = await Promise.allSettled([
+            this.namespace_hub.delete_multiple_objects(params, object_sdk),
+            this.namespace_nb.delete_multiple_objects(params, object_sdk),
+        ]);
+        if (hub_res.status === 'rejected') {
+            throw hub_res.reason;
+        }
+        if (cache_res.status === 'rejected') {
+            throw cache_res.reason;
+        }
 
         const operation = 'ObjectRemoved';
         const load_for_trigger = object_sdk.should_run_triggers({ active_triggers: this.active_triggers, operation });
@@ -604,8 +613,8 @@ class NamespaceCache {
                 return obj_md;
             });
 
-            for (let i = 0; i < deleted_res.length; ++i) {
-                const deleted_obj = deleted_res[i];
+            for (let i = 0; i < hub_res.value.length; ++i) {
+                const deleted_obj = hub_res.value[i];
                 const head_obj = head_res[i];
                 if (_.isUndefined(deleted_obj && deleted_obj.err_code) && head_obj) {
                     object_sdk.dispatch_triggers({ active_triggers: this.active_triggers, operation,
@@ -614,7 +623,7 @@ class NamespaceCache {
             }
         }
 
-        return deleted_res;
+        return hub_res.value;
     }
 
     ////////////////////
