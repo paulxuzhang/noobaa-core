@@ -46,10 +46,13 @@ Object.isFrozen(RpcError); // otherwise unused
  * @property {boolean} [chunked_content]
  * @property {Object} [desc]
  * @property {number} [start]
+ * @property {number} [end]
  * @property {number} [seq]
  * @property {Object} [chunk_split_config]
  * @property {Object} [chunk_coder_config]
  * @property {Object} [encryption]
+ * @property {Object} [from_cache]
+ * @property {Object} [partial_upload]
  *
  * @typedef {Object} ReadParams
  * @property {Object} client
@@ -57,6 +60,7 @@ Object.isFrozen(RpcError); // otherwise unused
  * @property {number} [start]
  * @property {number} [end]
  * @property {number} [watermark]
+ * @property {function} [missing_part_getter]
  *
  * @typedef {Object} CachedRead
  * @property {nb.ObjectInfo} object_md
@@ -150,6 +154,42 @@ class ObjectIO {
     ////////////////////////////////////////////////////////////////////////////
     // UPLOAD FLOW /////////////////////////////////////////////////////////////
     ////////////////////////////////////////////////////////////////////////////
+
+    /**
+     *
+     * upload_range_part
+     *
+     * upload range part
+     *
+     * @param {UploadParams} params
+     */
+    async upload_range_part(params) {
+        const complete_params = _.pick(params, 'obj_id', 'bucket', 'key');
+        const upload_params = _.pick(params, 'bucket', 'key', 'obj_id', 'start', 'end');
+
+        const obj_upload = await params.client.object.create_object_range_upload(upload_params);
+
+        params.chunk_split_config = obj_upload.chunk_split_config;
+        params.chunk_coder_config = obj_upload.chunk_coder_config;
+        params.bucket_id = obj_upload.bucket_id;
+        params.tier_id = obj_upload.tier_id;
+        params.partial_upload = true;
+        params.size = upload_params.end - upload_params.start;
+        params.seq = 0;
+
+        try {
+            dbg.log0('upload_range_part: start upload stream', upload_params);
+            await this._upload_stream(params, complete_params);
+
+            const complete_result = await params.client.object.complete_object_range_upload(complete_params);
+            dbg.log0('upload_range_part: completed object part upload', complete_result);
+
+            return complete_result;
+        } catch (err) {
+            dbg.error('upload_range_part: object part upload failed', upload_params, err);
+            throw err;
+        }
+    }
 
     /**
      *
@@ -336,9 +376,10 @@ class ObjectIO {
 
         // start and seq are set to zero even for multiparts and will be fixed
         // when multiparts are combined to object in complete_object_upload
-        params.start = 0;
-        params.seq = 0;
-
+        if (!params.partial_upload) {
+            params.start = 0;
+            params.seq = 0;
+        }
         complete_params.size = 0;
         complete_params.num_parts = 0;
 
@@ -418,6 +459,7 @@ class ObjectIO {
                     start: params.start,
                     end: params.start + chunk_info.size,
                     seq: params.seq,
+                    uncommitted: !params.partial_upload,
                     // millistamp: time_utils.millistamp(),
                     // bucket: params.bucket,
                     // key: params.key,
@@ -533,9 +575,25 @@ class ObjectIO {
                         end: requested_end,
                     });
                     if (buffers && buffers.length) {
-                        for (let i = 0; i < buffers.length; ++i) {
-                            reader.pos += buffers[i].length;
-                            reader.pending.push(buffers[i]);
+                        for (const buffer of buffers) {
+                            if (buffer.data) {
+                                reader.pos += buffer.data.length;
+                                reader.pending.push(buffer.data);
+                            } else {
+                                if (!params.missing_part_getter) {
+                                    throw new Error('missing_part_getter not set for getting missing part');
+                                }
+
+                                // Handle missing buffer part
+                                // If performance is needed, we can potentially perform concurrency on missing_part_getter
+                                // calls using promise.
+                                const missing_buf = await params.missing_part_getter(buffer.start, buffer.end);
+                                if (!missing_buf || missing_buf.length === 0) {
+                                    throw new Error('missing buffer should not be empty');
+                                }
+                                reader.pos += missing_buf.length;
+                                reader.pending.push(missing_buf);
+                            }
                         }
                         dbg.log0('READ reader pos', reader.pos);
                         reader.push(reader.pending.shift());
@@ -583,9 +641,10 @@ class ObjectIO {
     /**
      *
      * read_object
+     * If object is partial object, it also returns info about missing parts.
      *
      * @param {ReadParams} params
-     * @returns {Promise<Buffer[]>} a portion of data.
+     * @returns {Promise<Object[]>} a portion of data.
      *      this is mostly likely shorter than requested, and the reader should repeat.
      *      null is returned on empty range or EOF.
      */
@@ -671,11 +730,13 @@ class ObjectIO {
 
 
 /**
+ * slice_buffers_in_range
+ * It also returns missing parts in addition to found parts(chunks)
  *
  * @param {nb.Chunk[]} chunks
  * @param {number} start
  * @param {number} end
- * @return {Buffer[]}
+ * @return {Object[]}
  */
 function slice_buffers_in_range(chunks, start, end) {
     if (end <= start) {
@@ -683,16 +744,29 @@ function slice_buffers_in_range(chunks, start, end) {
         return null;
     }
     if (!chunks || !chunks.length) {
-        dbg.error('no chunks for data', range_utils.human_range({ start, end }));
-        throw new Error('no chunks for data');
+        // null data means that the part is missing.
+        return [ { start, end, data: null } ];
     }
     let pos = start;
-    /** @type {Buffer[]} */
     const buffers = [];
     for (const chunk of chunks) {
         const part = chunk.parts[0];
         let part_range = range_utils.intersection(part.start, part.end, pos, end);
-        if (!part_range) continue;
+        if (!part_range) {
+            if (end <= part.start) {
+                // null data means that the part is missing.
+                buffers.push({ start: pos, end, data: null });
+                pos = end;
+                break;
+            }
+            continue;
+        }
+
+        if (pos < part_range.start) {
+            // null data means that the part is missing.
+            buffers.push({ start: pos, end: part_range.start, data: null });
+        }
+
         let buffer_start = part_range.start - part.start;
         let buffer_end = part_range.end - part.start;
         if (part.chunk_offset) {
@@ -700,14 +774,13 @@ function slice_buffers_in_range(chunks, start, end) {
             buffer_end += part.chunk_offset;
         }
         pos = part_range.end;
-        buffers.push(chunk.data.slice(buffer_start, buffer_end));
+        buffers.push({ start: part_range.start, end: part_range.end, data: chunk.data.slice(buffer_start, buffer_end) });
+
+        if (pos >= end) break;
     }
-    if (pos !== end) {
-        dbg.error('missing parts for data',
-            range_utils.human_range({ start, end }),
-            'pos', pos, chunks
-        );
-        throw new Error('missing parts for data');
+    const last_chunk_end = chunks[chunks.length - 1].parts[0].end;
+    if ((pos < end && pos > start) || start >= last_chunk_end) {
+        buffers.push({start: pos, end, data: null});
     }
     // const buffer = buffer_utils.join(buffers);
     // if (buffer.length !== end - start) {

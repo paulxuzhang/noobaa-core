@@ -1,4 +1,5 @@
 /* Copyright (C) 2016 NooBaa */
+/*eslint max-lines: ["error", 2200]*/
 'use strict';
 
 const _ = require('lodash');
@@ -23,6 +24,7 @@ const map_server = require('./map_server');
 const map_reader = require('./map_reader');
 const map_deleter = require('./map_deleter');
 const cloud_utils = require('../../util/cloud_utils');
+const range_utils = require('../../util/range_utils');
 const system_utils = require('../utils/system_utils');
 const nodes_client = require('../node_services/nodes_client');
 const system_store = require('../system_services/system_store').get_instance();
@@ -66,14 +68,27 @@ async function create_object_upload(req) {
         content_type: req.rpc_params.content_type ||
             mime.getType(req.rpc_params.key) ||
             'application/octet-stream',
-        upload_started: obj_id,
-        upload_size: 0,
         tagging: req.rpc_params.tagging,
         encryption
     };
 
-    const lock_settings = config.WORM_ENABLED ? calc_retention(req) : undefined;
-    if (lock_settings) info.lock_settings = lock_settings;
+    if (req.rpc_params.complete_upload) {
+        if (!req.rpc_params.size || req.rpc_params.size < 0) {
+            throw new RpcError('INVALID_REQUEST', 'valid size must be provided when using complete_upload');
+        }
+        if (!req.rpc_params.etag) {
+            throw new RpcError('INVALID_REQUEST', 'etag must be provided when using complete_upload');
+        }
+        info.etag = req.rpc_params.etag;
+        if (req.bucket.namespace && req.bucket.namespace.caching) {
+            info.cache_last_valid_time = new Date();
+        }
+    } else {
+        info.upload_size = 0;
+        info.upload_started = obj_id;
+        const lock_settings = config.WORM_ENABLED ? calc_retention(req) : undefined;
+        if (lock_settings) info.lock_settings = lock_settings;
+    }
 
     if (req.rpc_params.size >= 0) info.size = req.rpc_params.size;
     if (req.rpc_params.md5_b64) info.md5_b64 = req.rpc_params.md5_b64;
@@ -433,6 +448,34 @@ async function complete_object_upload(req) {
         content_type: obj.content_type,
     };
 }
+
+/**
+ *
+ * complete_object_range_upload
+ *
+ */
+async function complete_object_range_upload(req) {
+    dbg.log0('object_server.complete_object_range_upload:', req.rpc_params);
+
+    throw_if_maintenance(req);
+
+    const obj = await find_cached_partial_object_upload(req);
+    const parts = await MDStore.instance().find_all_parts_of_object(obj);
+    parts.sort(_sort_parts_by_start);
+    const num_parts = parts.length;
+    const deduped_parts = range_utils.dedup_ranges(parts);
+    const upload_size = _.sumBy(deduped_parts, part => part.end - part.start);
+
+    return {
+        etag: obj.etag,
+        encryption: obj.encryption,
+        size: obj.size,
+        content_type: obj.content_type,
+        num_parts,
+        upload_size,
+    };
+}
+
 
 async function update_bucket_counters({ system, bucket_name, content_type, read_count, write_count }) {
     const bucket = system.buckets_by_name[bucket_name.unwrap()];
@@ -1343,7 +1386,7 @@ function get_object_info(md, options = {}) {
         },
         tagging: md.tagging,
         encryption: md.encryption,
-        tag_count: (md.tagging && md.tagging.length) || 0
+        tag_count: (md.tagging && md.tagging.length) || 0,
     };
 }
 
@@ -1399,6 +1442,28 @@ async function find_object_upload(req) {
 
 /**
  * @param {Object} req
+ */
+async function create_object_range_upload(req) {
+    dbg.log0('object_server.create_object_range_upload:', req.rpc_params);
+    throw_if_maintenance(req);
+
+    const obj = await find_cached_partial_object_upload(req);
+    const tier = await map_server.select_tier_for_write(req.bucket);
+    const encryption = _get_encryption_for_object(req);
+
+    return {
+        obj_id: obj._id,
+        bucket_id: req.bucket._id,
+        upload_size: obj.upload_size,
+        tier_id: tier._id,
+        chunk_split_config: req.bucket.tiering.chunk_split_config,
+        chunk_coder_config: tier.chunk_config.chunk_coder_config,
+        encryption
+    };
+}
+
+/**
+ * @param {Object} req
  * @returns {Promise<nb.ObjectMD>}
  */
 async function find_cached_object_upload(req) {
@@ -1406,6 +1471,20 @@ async function find_cached_object_upload(req) {
     const obj_id = get_obj_id(req, 'NO_SUCH_UPLOAD');
     const obj = await object_md_cache.get_with_cache(String(obj_id));
     check_object_mode(req, obj, 'NO_SUCH_UPLOAD');
+    return obj;
+}
+
+/**
+ * @param {Object} req
+ * @returns {Promise<nb.ObjectMD>}
+ */
+async function find_cached_partial_object_upload(req) {
+    load_bucket(req);
+    // Use "NO_SUCH_OBJECT" for rpc error instead of "NO_SUCH_UPLOAD"
+    // since partial object does not always have upload part
+    const obj_id = get_obj_id(req, 'NO_SUCH_OBJECT');
+    const obj = await object_md_cache.get_with_cache(String(obj_id));
+    check_object_mode(req, obj, 'NO_SUCH_OBJECT');
     return obj;
 }
 
@@ -1930,12 +2009,18 @@ function _sort_parts_by_seq(a, b) {
     return a.seq - b.seq;
 }
 
+function _sort_parts_by_start(a, b) {
+    return a.start - b.start;
+}
+
 
 // EXPORTS
 // object upload
 exports.create_object_upload = create_object_upload;
 exports.complete_object_upload = complete_object_upload;
+exports.complete_object_range_upload = complete_object_range_upload;
 exports.abort_object_upload = abort_object_upload;
+exports.create_object_range_upload = create_object_range_upload;
 // multipart
 exports.create_multipart = create_multipart;
 exports.complete_multipart = complete_multipart;
