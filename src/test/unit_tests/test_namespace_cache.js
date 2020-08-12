@@ -586,6 +586,54 @@ mocha.describe('namespace caching: read scenarios that object is cached', () => 
 
 });
 
+mocha.describe('namespace caching: proxy get request with partNumber query to hub', () => {
+    let recorder;
+    const ttl_ms = 2000;
+    const object_sdk = {
+        should_run_triggers: () => null,
+    };
+
+    mocha.before(() => {
+        recorder = new Recorder();
+    });
+
+    mocha.it('proxy get request with partNumber query to hub', async () => {
+        const hub = new MockNamespace({ type: 'hub', recorder, slow_write: true });
+        const cache = new MockNamespace({ type: 'cache', recorder });
+        const ns_cache = new NamespaceCache({
+            namespace_hub: hub,
+            namespace_nb: cache,
+            caching: { ttl_ms },
+        });
+
+        const obj = random_object(16);
+        hub.add_obj(obj);
+        const params = {
+            bucket: obj.bucket,
+            key: obj.key,
+            part_number: 1,
+        };
+
+        params.object_md = await ns_cache.read_object_md(params, object_sdk);
+        const stream = await ns_cache.read_object_stream(params, object_sdk);
+        const read_buf = await buffer_utils.read_stream_join(stream);
+        const read_etag = crypto.createHash('md5').update(read_buf).digest('hex');
+        let expect_etag = obj.etag;
+        if (params.start || params.end) {
+            expect_etag = crypto.createHash('md5').update(obj.buf).digest('hex');
+        }
+        assert(read_etag === expect_etag);
+
+        const hub_obj_create_time = recorder.get_event('hub', obj.bucket, obj.key, EVENT_CREATE_OBJ_MD);
+        assert(!_.isUndefined(hub_obj_create_time));
+
+        P.delay(50);
+        const cache_obj_create_time = recorder.get_event('cache', obj.bucket, obj.key, EVENT_CREATE_OBJ_MD);
+        assert(_.isUndefined(cache_obj_create_time));
+    });
+
+});
+
 mocha.describe('namespace caching: large objects', () => {
     let recorder;
     const ttl_ms = 2000;

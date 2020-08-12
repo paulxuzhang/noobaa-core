@@ -12,6 +12,7 @@ const s3_utils = require('../endpoint/s3/s3_utils');
 const blob_translator = require('./blob_translator');
 const stats_collector = require('./endpoint_stats_collector');
 const config = require('../../config');
+const { match_etag } = require('../util/http_utils');
 
 class NamespaceS3 {
 
@@ -119,10 +120,24 @@ class NamespaceS3 {
     // OBJECT READ //
     /////////////////
 
+    _set_md_conditions(params, request) {
+        if (params.md_conditions) {
+            request.IfMatch = params.md_conditions.if_match_etag;
+            request.IfNoneMatch = params.md_conditions.if_none_match_etag;
+            request.IfModifiedSince = params.md_conditions.if_modified_since;
+            request.IfUnmodifiedSince = params.md_conditions.if_unmodified_since;
+        } else {
+            // If md condition is not set by s3 client, set IfMatch to internal value
+            // used by caching to ensure we get object with the specified etag.
+            request.IfMatch = params.if_match_etag;
+        }
+    }
+
     async read_object_md(params, object_sdk) {
         try {
             dbg.log0('NamespaceS3.read_object_md:', this.bucket, inspect(params));
-            const request = { Key: params.key, Range: `bytes=0-${config.INLINE_MAX_SIZE - 1}` };
+            const request = { Key: params.key, Range: `bytes=0-${config.INLINE_MAX_SIZE - 1}`, PartNumber: params.part_number };
+            this._set_md_conditions(params, request);
             this._assign_encryption_to_request(params, request);
             const res = await this.s3.getObject(request).promise();
             dbg.log0('NamespaceS3.read_object_md:', this.bucket, inspect(params), 'res', inspect(res));
@@ -140,8 +155,9 @@ class NamespaceS3 {
             const request = {
                 Key: params.key,
                 Range: params.end ? `bytes=${params.start}-${params.end - 1}` : undefined,
-                IfMatch: params.if_match_etag,
+                PartNumber: params.part_number,
             };
+            this._set_md_conditions(params, request);
             this._assign_encryption_to_request(params, request);
             const req = this.s3.getObject(request)
                 .on('error', err => {
@@ -523,6 +539,7 @@ class NamespaceS3 {
             xattr,
             tag_count: res.TagCount,
             first_range_data: res.Body,
+            part_count: res.PartsCount,
         };
     }
 

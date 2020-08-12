@@ -65,27 +65,29 @@ class NamespaceContext {
         await this._noobaa_s3ops.get_file_check_md5(noobaa_bucket, file_name);
     }
 
-    async get_object_s3_md(s3ops_arg, bucket, file_name, get_from_cache) {
+    async get_object_s3_md(s3ops_arg, bucket, file_name, get_from_cache, preconditions) {
         try {
-            const ret = await s3ops_arg.get_object(bucket, file_name, get_from_cache ? { get_from_cache: true } : undefined);
+            const ret = await s3ops_arg.get_object(bucket, file_name,
+                get_from_cache ? { get_from_cache: true } : undefined, preconditions);
             return {
                 md5: crypto.createHash('md5').update(ret.Body).digest('base64'),
                 size: ret.Body.length,
                 etag: _.trim(ret.ETag, '"')
             };
         } catch (err) {
-            throw new Error(`Failed to get data from ${file_name} in ${bucket}: ${err}`);
+            console.log(`Failed to get data from ${file_name} in ${bucket}: ${err}`);
+            throw err;
         }
     }
 
-    async get_via_cloud(type, file_name) {
+    async get_via_cloud(type, file_name, preconditions) {
         const cloud_bucket = this._ns_mapping[type].bucket2;
-        return this.get_object_s3_md(this._ns_mapping[type].s3ops, cloud_bucket, file_name);
+        return this.get_object_s3_md(this._ns_mapping[type].s3ops, cloud_bucket, file_name, false, preconditions);
     }
 
-    async get_via_noobaa(type, file_name) {
+    async get_via_noobaa(type, file_name, preconditions) {
         const noobaa_bucket = this._ns_mapping[type].gateway;
-        return this.get_object_s3_md(this._noobaa_s3ops, noobaa_bucket, file_name);
+        return this.get_object_s3_md(this._noobaa_s3ops, noobaa_bucket, file_name, false, preconditions);
     }
 
     async get_size_etag(s3ops_arg, bucket, file_name) {
@@ -107,9 +109,9 @@ class NamespaceContext {
         }
     }
 
-    async get_via_noobaa_expect_not_found(type, file_name) {
+    async get_via_noobaa_expect_not_found(type, file_name, get_from_cache) {
         const noobaa_bucket = this._ns_mapping[type].gateway;
-        await this.get_object_expect_not_found(this._noobaa_s3ops, noobaa_bucket, file_name);
+        await this.get_object_expect_not_found(this._noobaa_s3ops, noobaa_bucket, file_name, get_from_cache);
     }
 
     async get_via_cloud_expect_not_found(type, file_name) {

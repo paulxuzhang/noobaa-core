@@ -1,6 +1,7 @@
 /* Copyright (C) 2016 NooBaa */
 'use strict';
 
+const _ = require('lodash');
 const dbg = require('../../../util/debug_module')(__filename);
 const S3Error = require('../s3_errors').S3Error;
 const s3_utils = require('../s3_utils');
@@ -14,13 +15,19 @@ async function get_object(req, res) {
     const agent_header = req.headers['user-agent'];
     const noobaa_trigger_agent = agent_header && agent_header.includes('exec-env/NOOBAA_FUNCTION');
     const encryption = s3_utils.parse_encryption(req);
+    let part_number;
+    if (!_.isUndefined(req.query.partNumber)) {
+        part_number = s3_utils.parse_part_number(req.query.partNumber, S3Error.InvalidArgument);
+    }
+    const md_conditions = http_utils.get_md_conditions(req);
 
     const md_params = {
         bucket: req.params.bucket,
         key: req.params.key,
         version_id: req.query.versionId,
-        md_conditions: http_utils.get_md_conditions(req),
-        encryption
+        md_conditions,
+        encryption,
+        part_number,
     };
     if (req.query.get_from_cache !== undefined) {
         md_params.get_from_cache = true;
@@ -37,7 +44,9 @@ async function get_object(req, res) {
         key: req.params.key,
         content_type: object_md.content_type,
         noobaa_trigger_agent,
+        md_conditions,
         encryption,
+        part_number,
     };
     if (md_params.get_from_cache) {
         params.get_from_cache = true;

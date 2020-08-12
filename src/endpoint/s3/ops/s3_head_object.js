@@ -2,8 +2,10 @@
 'use strict';
 
 // const S3Error = require('../s3_errors').S3Error;
+const _ = require('lodash');
 const s3_utils = require('../s3_utils');
 const http_utils = require('../../../util/http_utils');
+const S3Error = require('../s3_errors').S3Error;
 
 /**
  * http://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectHEAD.html
@@ -17,6 +19,9 @@ async function head_object(req, res) {
         md_conditions: http_utils.get_md_conditions(req),
         encryption
     };
+    if (!_.isUndefined(req.query.partNumber)) {
+        params.part_number = s3_utils.parse_part_number(req.query.partNumber, S3Error.InvalidArgument);
+    }
     if (req.query.get_from_cache !== undefined) {
         params.get_from_cache = true;
     }

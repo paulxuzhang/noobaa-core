@@ -179,31 +179,32 @@ class NamespaceCache {
         let object_info_cache = null;
         let cache_etag = '';
         const get_from_cache = params.get_from_cache;
-        try {
-            // Remove get_from_cache if exists for maching RPC schema
-            params = _.omit(params, 'get_from_cache');
-            object_info_cache = await this.namespace_nb.read_object_md(params, object_sdk);
-            if (get_from_cache) {
-                dbg.log0('NamespaceCache.read_object_md get_from_cache is enabled', object_info_cache);
-                object_info_cache.should_read_from_cache = true;
-                return object_info_cache;
+        if (!params.part_number) {
+            try {
+                // Remove get_from_cache if exists for maching RPC schema
+                params = _.omit(params, 'get_from_cache');
+                object_info_cache = await this.namespace_nb.read_object_md(params, object_sdk);
+                if (get_from_cache) {
+                    dbg.log0('NamespaceCache.read_object_md get_from_cache is enabled', object_info_cache);
+                    object_info_cache.should_read_from_cache = true;
+                    return object_info_cache;
+                }
+
+                const cache_validation_time = object_info_cache.cache_last_valid_time;
+                const time_since_validation = Date.now() - cache_validation_time;
+
+                if ((this.caching.ttl_ms > 0 && time_since_validation <= this.caching.ttl_ms) || this.caching.ttl_ms < 0) {
+                    object_info_cache.should_read_from_cache = true; // mark it for read_object_stream
+                    dbg.log0('NamespaceCache.read_object_md use md from cache', object_info_cache);
+                    return object_info_cache;
+                }
+
+                cache_etag = object_info_cache.etag;
+            } catch (err) {
+                dbg.log0('NamespaceCache.read_object_md: error in cache', err);
+                if (get_from_cache) throw err;
             }
-
-            const cache_validation_time = object_info_cache.cache_last_valid_time;
-            const time_since_validation = Date.now() - cache_validation_time;
-
-            if ((this.caching.ttl_ms > 0 && time_since_validation <= this.caching.ttl_ms) || this.caching.ttl_ms < 0) {
-                object_info_cache.should_read_from_cache = true; // mark it for read_object_stream
-                dbg.log0('NamespaceCache.read_object_md use md from cache', object_info_cache);
-                return object_info_cache;
-            }
-
-            cache_etag = object_info_cache.etag;
-        } catch (err) {
-            dbg.log0('NamespaceCache.read_object_md: error in cache', err);
-            if (get_from_cache) throw err;
         }
-
         try {
             const object_info_hub = await this.namespace_hub.read_object_md(params, object_sdk);
             if (object_info_hub.etag === cache_etag) {
@@ -357,8 +358,9 @@ class NamespaceCache {
             hub_read_stream.pipe(range_stream);
         }
 
-        // Object or part will only be uploaded to cache if size is not too big
-        if (hub_read_size <= params.bucket_free_space_bytes) {
+        // Object or part will only be uploaded to cache if size is not too big and
+        // the preconditions (if-match header etc.) are not set.
+        if (hub_read_size <= params.bucket_free_space_bytes && !params.md_conditions) {
             // We use pass through stream here because we have to start piping immediately
             // and the cache upload does not pipe immediately (only after creating the object_md).
             const cache_upload_stream = new stream.PassThrough();
@@ -401,6 +403,13 @@ class NamespaceCache {
 
 
     async read_object_stream(params, object_sdk) {
+        if (params.part_number) {
+            // If the query parameter partNumber is set, the object was most likely
+            // created by the multipart upload. Since we don't support MP in cache,
+            // we proxy the read to hub.
+            return this.namespace_hub.read_object_stream(params, object_sdk);
+        }
+
         const get_from_cache = params.get_from_cache;
         // Remove get_from_cache if exists for matching RPC schema
         params = _.omit(params, 'get_from_cache');

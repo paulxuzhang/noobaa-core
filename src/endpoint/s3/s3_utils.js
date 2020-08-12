@@ -277,6 +277,7 @@ function set_response_object_md(res, object_md) {
     if (object_md.version_id) res.setHeader('x-amz-version-id', object_md.version_id);
     set_response_xattr(res, object_md.xattr);
     if (object_md.tag_count) res.setHeader('x-amz-tagging-count', object_md.tag_count);
+    if (object_md.part_count) res.setHeader('x-amz-mp-parts-count', object_md.part_count);
     return object_md;
 }
 

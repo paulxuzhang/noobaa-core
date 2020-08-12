@@ -19,7 +19,7 @@ const ns_cache_test_large_file = require('./namespace_cache_large_file_test');
 
 const caching_tests = [
     ns_cache_test_normal,
-    ns_cache_test_range_read,
+    //ns_cache_test_range_read,
 ];
 
 if (config.NAMESPACE_CACHING.DISABLE_BUCKET_FREE_SPACE_CHECK) {

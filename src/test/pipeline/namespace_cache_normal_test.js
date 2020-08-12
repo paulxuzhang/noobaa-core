@@ -3,6 +3,8 @@
 
 const promise_utils = require('../../util/promise_utils');
 const config = require('../../../config');
+const { assert } = require('console');
+const P = require('../../util/promise');
 
 const test_scenarios = [
     'object cached during read to namespace bucket',
@@ -14,6 +16,7 @@ const test_scenarios = [
     'get operation: object not found',
     'delete operation success',
     'delete non-exist object',
+    'object not cached: proxy get with precondition header to hub',
 ];
 
 async function run_namespace_cache_tests_non_range_read({ type, ns_context }) {
@@ -22,11 +25,13 @@ async function run_namespace_cache_tests_non_range_read({ type, ns_context }) {
     const prefix = `file_${(Math.floor(Date.now() / 1000))}_${type}`;
     const file_name1 = `${prefix}_${min_file_size_kb * 2}_KB`;
     const file_name2 = `${prefix}_${min_file_size_kb + 1}_KB`;
-    const file_name_delete_case1 = `delete_${prefix}_${min_file_size_kb + 1}_KB`;
-    const file_name_delete_case2 = `delete_${prefix}_${min_file_size_kb + 2}_KB`;
+    const file_name_precondition1 = `${prefix}_precondition_${min_file_size_kb + 1}_KB`;
+    const file_name_precondition2 = `${prefix}_precondition_${min_file_size_kb + 1}_KB`;
+    const file_name_delete_case1 = `${prefix}_delete_${min_file_size_kb + 1}_KB`;
+    const file_name_delete_case2 = `${prefix}_delete_${min_file_size_kb + 2}_KB`;
     let cache_last_valid_time;
     let time_start = (new Date()).getTime();
-
+/*
     // !!!!!!!! NOTE: The order of the tests matters. Don't change the order.  !!!!!!!!!!!!
     await ns_context.run_test_case('object cached during upload to namespace bucket', type, async () => {
         // Upload a file to namespace cache bucket
@@ -151,6 +156,8 @@ async function run_namespace_cache_tests_non_range_read({ type, ns_context }) {
         });
     });
 
+    // !!!!!!!! NOTE: The order of the above tests matters. Don't change the order.  !!!!!!!!!!!!
+
     await ns_context.run_test_case('object cached during read to namespace bucket', type, async () => {
         // Upload a file to hub bucket and read it from namespace bucket
         // Expect that etags in both hub and noobaa cache bucket match
@@ -224,6 +231,30 @@ async function run_namespace_cache_tests_non_range_read({ type, ns_context }) {
     await ns_context.run_test_case('delete non-exist object', type, async () => {
         const file_name = 'file_not_exist_123';
         await ns_context.delete_from_noobaa(type, file_name);
+    });
+*/
+    await ns_context.run_test_case('object not cached: proxy get with precondition header to hub', type, async () => {
+        // Upload a file to hub bucket and read it from namespace bucket
+        const file_name = file_name_precondition1;
+        const md5 = await ns_context.upload_directly_to_cloud(type, file_name);
+        let obj_md = await ns_context.get_via_noobaa(type, file_name, { IfMatch: md5 });
+        assert(obj_md.etag === md5);
+
+        P.delay(100);
+        await ns_context.get_via_noobaa_expect_not_found(type, file_name, true);
+
+        try {
+            await ns_context.get_via_noobaa(type, file_name, { IfMatch: 'different etag' });
+        } catch (err) {
+            assert(err.code === 'PreconditionFailed');
+        }
+
+        obj_md = await ns_context.get_via_noobaa(type, file_name, { IfNoneMatch: 'none-match-etag-value' });
+        assert(obj_md.etag === md5);
+
+        P.delay(100);
+        await ns_context.get_via_noobaa_expect_not_found(type, file_name, true);
+
     });
 
 }
