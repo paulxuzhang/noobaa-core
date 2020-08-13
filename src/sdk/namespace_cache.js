@@ -252,7 +252,9 @@ class NamespaceCache {
         const range_hub_read = await this._range_read_hub_check(params, object_sdk);
         if (!params.object_md.should_read_from_cache) {
             // Object not in cache
-            if (range_hub_read && params.read_size <= params.bucket_free_space_bytes) {
+            if (range_hub_read &&
+                params.read_size <= params.bucket_free_space_bytes &&
+                _.isUndefined(params.md_conditions)) {
                 const create_params = _.pick(params,
                     'bucket',
                     'key',
@@ -335,7 +337,9 @@ class NamespaceCache {
 
         let hub_read_stream;
         try {
-            hub_read_params.if_match_etag = params.object_md.etag;
+            if (_.isUndefined(hub_read_params.md_conditions)) {
+                hub_read_params.md_conditions = { if_match_etag: params.object_md.etag };
+            }
             hub_read_stream = await this.namespace_hub.read_object_stream(hub_read_params, object_sdk);
         } catch (err) {
             if (err.rpc_code === 'IF_MATCH_ETAG') {
@@ -360,7 +364,7 @@ class NamespaceCache {
 
         // Object or part will only be uploaded to cache if size is not too big and
         // the preconditions (if-match header etc.) are not set.
-        if (hub_read_size <= params.bucket_free_space_bytes && !params.md_conditions) {
+        if (hub_read_size <= params.bucket_free_space_bytes && _.isUndefined(params.md_conditions)) {
             // We use pass through stream here because we have to start piping immediately
             // and the cache upload does not pipe immediately (only after creating the object_md).
             const cache_upload_stream = new stream.PassThrough();

@@ -70,9 +70,10 @@ class NamespaceContext {
             const ret = await s3ops_arg.get_object(bucket, file_name,
                 get_from_cache ? { get_from_cache: true } : undefined, preconditions);
             return {
-                md5: crypto.createHash('md5').update(ret.Body).digest('base64'),
+                md5: crypto.createHash('md5').update(ret.Body).digest('hex'),
                 size: ret.Body.length,
-                etag: _.trim(ret.ETag, '"')
+                etag: _.trim(ret.ETag, '"'),
+                last_modified_time: ret.LastModified,
             };
         } catch (err) {
             console.log(`Failed to get data from ${file_name} in ${bucket}: ${err}`);
@@ -207,22 +208,23 @@ class NamespaceContext {
     }
 
     // end is inclusive
-    async get_range_md5_size(s3ops_arg, bucket, file_name, start, end) {
+    async get_range_md5_size(s3ops_arg, bucket, file_name, start, end, preconditions) {
         console.log(`${BLUE}reading range ${start}-${end} from ${file_name} on bucket ${bucket}${NC}`);
         try {
-            const ret_body = await s3ops_arg.get_object_range(bucket, file_name, start, end);
+            const ret_body = await s3ops_arg.get_object_range(bucket, file_name, start, end, undefined, preconditions);
             return {
-                md5: crypto.createHash('md5').update(ret_body).digest('base64'),
+                md5: crypto.createHash('md5').update(ret_body).digest('hex'),
                 size: ret_body.length
             };
         } catch (err) {
-            throw new Error(`Failed to get range data from ${file_name} in ${bucket}: ${err}`);
+            console.log(`Failed to get range data from ${file_name} in ${bucket}: ${err}`);
+            throw err;
         }
     }
 
-    async get_range_md5_size_via_noobaa(type, file_name, start, end) {
+    async get_range_md5_size_via_noobaa(type, file_name, start, end, preconditions) {
         const noobaa_bucket = this._ns_mapping[type].gateway;
-        return this.get_range_md5_size(this._noobaa_s3ops, noobaa_bucket, file_name, start, end);
+        return this.get_range_md5_size(this._noobaa_s3ops, noobaa_bucket, file_name, start, end, preconditions);
     }
 
     async validate_md5_range_read_between_hub_and_cache({ type, file_name,
@@ -273,11 +275,11 @@ class NamespaceContext {
             this._files_cloud[`files_${type}`] = [ file_name ];
         }
         try {
-            await this._noobaa_s3ops.put_file_with_md5(bucket, file_name, size, data_multiplier);
+            const md5 = await this._noobaa_s3ops.put_file_with_md5(bucket, file_name, size, data_multiplier);
+            return md5;
         } catch (err) {
             throw new Error(`Failed upload ${file_name} ${err}`);
         }
-        return file_name;
     }
 
     async upload_directly_to_cloud(type, file_name) {

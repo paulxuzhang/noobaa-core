@@ -470,6 +470,37 @@ mocha.describe('namespace caching: read scenarios and fresh objects', () => {
         const cache_obj_create_time = recorder.get_event('cache', obj.bucket, obj.key, EVENT_CREATE_OBJ_MD);
         assert(_.isUndefined(cache_obj_create_time));
     });
+
+    mocha.it('object not cached if precondition (e.g. if-etag) is set by s3 client', async () => {
+        const hub = new MockNamespace({ type: 'hub', recorder, slow_write: true });
+        const cache = new MockNamespace({ type: 'cache', recorder });
+        const ns_cache = new NamespaceCache({
+            namespace_hub: hub,
+            namespace_nb: cache,
+            caching: { ttl_ms },
+        });
+
+        const size = block_size * 5;
+        const obj = random_object(size);
+        hub.add_obj(obj);
+        let params = {
+            bucket: obj.bucket,
+            key: obj.key,
+            md_conditions: { if_match_etag: 'match etag' },
+        };
+
+        let object_md = await ns_cache.read_object_md(params, object_sdk);
+        params.object_md = object_md;
+        await ns_cache.read_object_stream(params, object_sdk);
+
+        await P.delay(100);
+        try {
+            recorder.get_obj('cache', obj.bucket, obj.key);
+        } catch (err) {
+            assert(err.rpc_code === 'NO_SUCH_UPLOAD');
+        }
+    });
+
 });
 
 mocha.describe('namespace caching: read scenarios that object is cached', () => {
@@ -627,7 +658,7 @@ mocha.describe('namespace caching: proxy get request with partNumber query to hu
         const hub_obj_create_time = recorder.get_event('hub', obj.bucket, obj.key, EVENT_CREATE_OBJ_MD);
         assert(!_.isUndefined(hub_obj_create_time));
 
-        P.delay(50);
+        await P.delay(50);
         const cache_obj_create_time = recorder.get_event('cache', obj.bucket, obj.key, EVENT_CREATE_OBJ_MD);
         assert(_.isUndefined(cache_obj_create_time));
     });
@@ -666,7 +697,7 @@ mocha.describe('namespace caching: large objects', () => {
         };
         const ret = await ns_cache.upload_object(params, object_sdk);
         assert(ret.etag === etag);
-        P.delay(10);
+        await P.delay(10);
         const cache_obj_create_time = recorder.get_event('cache', bucket, key, EVENT_CREATE_OBJ_MD);
         assert(_.isUndefined(cache_obj_create_time));
     });
@@ -674,7 +705,7 @@ mocha.describe('namespace caching: large objects', () => {
     mocha.it('large object not cached during read', async () => {
         const { obj } = await create_namespace_cache_and_read_obj({
             recorder, size: free + 10, ttl_ms, object_sdk });
-        P.delay(100);
+        await P.delay(100);
         const cache_obj_create_time = recorder.get_event('cache', obj.bucket, obj.key, EVENT_CREATE_OBJ_MD);
         assert(_.isUndefined(cache_obj_create_time));
     });
@@ -795,6 +826,41 @@ mocha.describe('namespace caching: range read scenarios', () => {
         }
     });
 
+    mocha.it('range read case: part not cached if precondition (e.g. if-etag) is set by s3 client', async () => {
+        const hub = new MockNamespace({ type: 'hub', recorder, slow_write: true });
+        const cache = new MockNamespace({ type: 'cache', recorder });
+        const ns_cache = new NamespaceCache({
+            namespace_hub: hub,
+            namespace_nb: cache,
+            caching: { ttl_ms },
+        });
+
+        const size = block_size * 5;
+        const obj = random_object(size);
+        hub.add_obj(obj);
+        let start = block_size + 100;
+        // end is exclusive
+        let end = start + 100;
+        let params = {
+            bucket: obj.bucket,
+            key: obj.key,
+            start,
+            end,
+            md_conditions: { if_match_etag: 'match etag' },
+        };
+
+        let object_md = await ns_cache.read_object_md(params, object_sdk);
+        params.object_md = object_md;
+        await ns_cache.read_object_stream(params, object_sdk);
+
+        await P.delay(100);
+        try {
+            recorder.get_obj('cache', obj.bucket, obj.key);
+        } catch (err) {
+            assert(err.rpc_code === 'NO_SUCH_UPLOAD');
+        }
+    });
+
     mocha.it('cache entire small file after range read', async () => {
         const size = block_size - 100;
         const start = size - 100;
@@ -828,7 +894,7 @@ mocha.describe('namespace caching: range read scenarios', () => {
         const { obj } = await create_namespace_cache_and_read_obj({
             recorder, size, ttl_ms, object_sdk: object_sdk_large_range_read, start, end });
 
-        P.delay(100);
+        await P.delay(100);
         try {
             recorder.get_obj('cache', obj.bucket, obj.key);
             assert(false);

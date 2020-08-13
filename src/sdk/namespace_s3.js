@@ -124,12 +124,12 @@ class NamespaceS3 {
         if (params.md_conditions) {
             request.IfMatch = params.md_conditions.if_match_etag;
             request.IfNoneMatch = params.md_conditions.if_none_match_etag;
-            request.IfModifiedSince = params.md_conditions.if_modified_since;
-            request.IfUnmodifiedSince = params.md_conditions.if_unmodified_since;
-        } else {
-            // If md condition is not set by s3 client, set IfMatch to internal value
-            // used by caching to ensure we get object with the specified etag.
-            request.IfMatch = params.if_match_etag;
+            if (params.md_conditions.if_modified_since) {
+                request.IfModifiedSince = new Date(params.md_conditions.if_modified_since);
+            }
+            if (params.md_conditions.if_unmodified_since) {
+                request.IfUnmodifiedSince = new Date(params.md_conditions.if_unmodified_since);
+            }
         }
     }
 
@@ -143,7 +143,7 @@ class NamespaceS3 {
             dbg.log0('NamespaceS3.read_object_md:', this.bucket, inspect(params), 'res', inspect(res));
             return this._get_s3_object_info(res, params.bucket);
         } catch (err) {
-            this._translate_error_code(err);
+            this._translate_error_code(params, err);
             dbg.warn('NamespaceS3.read_object_md:', inspect(err));
             throw err;
         }
@@ -161,7 +161,7 @@ class NamespaceS3 {
             this._assign_encryption_to_request(params, request);
             const req = this.s3.getObject(request)
                 .on('error', err => {
-                    this._translate_error_code(err);
+                    this._translate_error_code(params, err);
                     dbg.warn('NamespaceS3.read_object_stream:', inspect(err));
                     reject(err);
                 })
@@ -543,10 +543,19 @@ class NamespaceS3 {
         };
     }
 
-    _translate_error_code(err) {
+    _translate_error_code(params, err) {
         if (err.code === 'NoSuchKey') err.rpc_code = 'NO_SUCH_OBJECT';
-        if (err.code === 'NotFound') err.rpc_code = 'NO_SUCH_OBJECT';
-        if (err.code === 'PreconditionFailed') err.rpc_code = 'IF_MATCH_ETAG';
+        else if (err.code === 'NotFound') err.rpc_code = 'NO_SUCH_OBJECT';
+        else {
+            const md_conditions = params.md_conditions;
+            if (err.code === 'PreconditionFailed') {
+                if (md_conditions.if_match_etag) err.rpc_code = 'IF_MATCH_ETAG';
+                else if (md_conditions.if_unmodified_since) err.rpc_code = 'IF_UNMODIFIED_SINCE';
+            } else if (err.code === 'NotModified') {
+                if (md_conditions.if_modified_since) err.rpc_code = 'IF_MODIFIED_SINCE';
+                else if (md_conditions.if_none_match_etag) err.rpc_code = 'IF_NONE_MATCH_ETAG';
+            }
+        }
     }
 
     _assign_encryption_to_request(params, request) {
