@@ -2874,6 +2874,12 @@ class NodesMonitor extends EventEmitter {
             error_write_count: 0,
             error_read_bytes: 0,
             error_write_bytes: 0,
+            cache_read_bytes: 0,
+            cache_write_bytes: 0,
+            cache_object_read_count: 0,
+            cache_range_read_count: 0,
+            cache_object_read_miss_count: 0,
+            cache_range_read_miss_count: 0,
         };
         let storage = {
             total: 0,

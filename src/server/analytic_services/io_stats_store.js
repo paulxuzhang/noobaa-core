@@ -64,7 +64,10 @@ class IoStatsStore {
         };
         const update = {
             $set: selector,
-            $inc: _.pick(stats, 'read_count', 'write_count', 'read_bytes', 'write_bytes', 'error_read_count', 'error_write_count', 'error_read_bytes', 'error_write_bytes')
+            $inc: _.pick(stats, 'read_count', 'write_count', 'read_bytes', 'write_bytes',
+                'error_read_count', 'error_write_count', 'error_read_bytes', 'error_write_bytes',
+                'cache_object_read_count', 'cache_range_read_count',
+                'cache_object_read_miss_count', 'cache_range_read_miss_count')
         };
         const res = await this._io_stats.col().findOneAndUpdate(selector, update, {
             upsert: true,
@@ -112,6 +115,13 @@ class IoStatsStore {
                 error_write_count: { $sum: '$error_write_count' },
                 error_read_bytes: { $sum: '$error_read_bytes' },
                 error_write_bytes: { $sum: '$error_write_bytes' },
+                cache_read_bytes: { $sum: '$cache_read_bytes' },
+                cache_write_bytes: { $sum: '$cache_write_bytes' },
+                cache_object_read_count: { $sum: 'cache_object_read_count' },
+                cache_range_read_count: { $sum: 'cache_range_read_count' },
+                cache_object_read_miss_count: { $sum: 'cache_object_read_miss_count' },
+                cache_range_read_miss_count: { $sum: 'cache_range_read_miss_count' },
+
             },
         }]).toArray();
     }

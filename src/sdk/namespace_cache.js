@@ -12,6 +12,7 @@ const P = require('../util/promise');
 const buffer_utils = require('../util/buffer_utils');
 const Semaphore = require('../util/semaphore');
 const S3Error = require('../endpoint/s3/s3_errors').S3Error;
+const stats_collector = require('./endpoint_stats_collector');
 
 const _global_cache_uploader = new Semaphore(cache_config.UPLOAD_SEMAPHORE_CAP, {
     timeout: cache_config.UPLOAD_SEMAPHORE_TIMEOUT,
@@ -113,6 +114,17 @@ class NamespaceCache {
 
     _should_cache_entire_object(params) {
         return params.object_md.size <= cache_config.DEFAULT_BLOCK_SIZE;
+    }
+
+    _update_cache_stats(params, cache_miss, read_bytes, write_bytes) {
+        stats_collector.instance(this.namespace_hub.rpc_client).update_namespace_cache_stats({
+            namespace_resource_id: this.namespace_hub.namespace_resource_id,
+            range_read: params.start !== undefined || params.end !== undefined,
+            cache_miss,
+            read_count: read_bytes ? 1 : 0,
+            read_bytes,
+            write_bytes,
+        });
     }
 
     // Determine whether range read should be performed on hub by checking various factors.
@@ -320,6 +332,7 @@ class NamespaceCache {
 
         try {
             const cache_read_stream = await this.namespace_nb.read_object_stream(params, object_sdk);
+            this._update_cache_stats(params, false, params.read_size, 0);
             return cache_read_stream;
         } catch (err) {
             dbg.error('NamespaceCache.hub_range_read: fallback to hub after error in reading cache', err);
@@ -403,12 +416,15 @@ class NamespaceCache {
                 content_type: params.content_type,
                 xattr: params.object_md.xattr,
             };
+            let upload_size = 0;
             if (hub_read_range) {
                 if (params.md_conditions === undefined ||
                     params.md_conditions.if_match_etag === params.object_md.etag) {
 
                     upload_params.start = hub_read_range.start;
                     upload_params.end = hub_read_range.end;
+
+                    upload_size = upload_params.end - upload_params.start;
                     // Set object ID since partial object has been created before
                     upload_params.obj_id = params.object_md.obj_id;
 
@@ -426,11 +442,14 @@ class NamespaceCache {
                         { md_conditions: params.md_conditions, cache_object_md: params.object_md });
                 }
             } else {
+                upload_size = params.object_md.size;
                 _global_cache_uploader.submit_background(
                     params.object_md.size,
                     async () => this.namespace_nb.upload_object(upload_params, object_sdk)
                 );
             }
+
+            this._update_cache_stats(params, true, 0, upload_size);
         }
 
         const ret_stream = range_stream ? range_stream : hub_read_stream;
@@ -464,6 +483,7 @@ class NamespaceCache {
             try {
                 dbg.log0('NamespaceCache.read_object_stream: get_from_cache is on: read object from cache', params);
                 read_response = await this.namespace_nb.read_object_stream(params, object_sdk);
+                this._update_cache_stats(params);
             } catch (err) {
                 dbg.warn('NamespaceCache.read_object_stream: cache read error', err);
             }
@@ -559,6 +579,8 @@ class NamespaceCache {
 
             if (cache_ok) {
                 assert.strictEqual(hub_res.value.etag, cache_res.value.etag);
+
+                this._update_cache_stats(params, false, 0, params.size);
             } else {
                 // on error from cache, we ignore and let hub upload continue
                 dbg.log0("NamespaceCache.upload_object: error in cache upload", { params: _.omit(params, 'source_stream'), hub_res, cache_res });

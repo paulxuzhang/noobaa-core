@@ -56,6 +56,12 @@ class EndpointStatsCollector {
             error_write_count: 0,
             error_read_bytes: 0,
             error_read_count: 0,
+            cache_read_bytes: 0,
+            cache_write_bytes: 0,
+            cache_object_read_count: 0,
+            cache_range_read_count: 0,
+            cache_object_read_miss_count: 0,
+            cache_range_read_miss_count: 0,
         };
     }
 
@@ -82,6 +88,31 @@ class EndpointStatsCollector {
             io_stats.write_count += count;
             io_stats.write_bytes += size;
         }
+        this._trigger_send_stats();
+    }
+
+    update_namespace_cache_stats({ namespace_resource_id,
+        range_read = false, cache_miss = false, read_count = 1,
+        read_bytes = 0, write_bytes = 0 }) {
+
+        this.namespace_stats[namespace_resource_id] = this.namespace_stats[namespace_resource_id] || this._new_namespace_stats();
+        const io_stats = this.namespace_stats[namespace_resource_id];
+
+        io_stats.cache_write_bytes += write_bytes;
+        io_stats.cache_read_bytes += read_bytes;
+
+        if (range_read) {
+            if (cache_miss) {
+                io_stats.cache_range_read_miss_count += read_count;
+            } else {
+                io_stats.cache_range_read_count += read_count;
+            }
+        } else if (cache_miss) {
+            io_stats.cache_object_read_miss_count += read_count;
+        } else {
+            io_stats.cache_object_read_count += read_count;
+        }
+
         this._trigger_send_stats();
     }
 

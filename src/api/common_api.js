@@ -690,6 +690,24 @@ module.exports = {
                 error_write_bytes: {
                     type: 'integer'
                 },
+                cache_read_bytes: {
+                    type: 'integer'
+                },
+                cache_write_bytes: {
+                    type: 'integer'
+                },
+                cache_object_read_count: {
+                    type: 'integer'
+                },
+                cache_object_read_miss_count: {
+                    type: 'integer'
+                },
+                cache_range_read_count: {
+                    type: 'integer'
+                },
+                cache_range_read_miss_count: {
+                    type: 'integer'
+                },
             }
         },
 
